@@ -1,0 +1,15 @@
+{
+  "name": "ChasingMajors Checklist Viewer (Beta)",
+  "short_name": "Checklist",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b0f19",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "https://www.chasingmajors.com/favicon.ico",
+      "sizes": "any",
+      "type": "image/x-icon"
+    }
+  ]
+}
