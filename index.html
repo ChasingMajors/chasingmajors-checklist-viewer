@@ -1,10 +1,242 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <title>Checklist Viewer Beta</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#111827" />
+  <title>ChasingMajors Checklist Viewer (Beta)</title>
+
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: #0b0f19;
+      color: #e5e7eb;
+    }
+    a { color: #93c5fd; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+
+    .card {
+      background: #0f172a;
+      border: 1px solid #1f2937;
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 6px 18px rgba(0,0,0,.25);
+    }
+
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .row > * { flex: 1 1 auto; }
+
+    .h1 { font-size: 20px; font-weight: 700; margin: 0 0 8px; }
+    .subtle { color: #9ca3af; font-size: 13px; }
+    .divider { height: 1px; background: #1f2937; margin: 12px 0; }
+
+    input, select, button {
+      background: #0b1222;
+      border: 1px solid #263244;
+      color: #e5e7eb;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 14px;
+      outline: none;
+    }
+    button {
+      cursor: pointer;
+      background: #111827;
+    }
+    button:hover { border-color: #3b82f6; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid #263244;
+      background: #0b1222;
+      font-size: 12px;
+      color: #d1d5db;
+    }
+    .badge {
+      display: inline-flex;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid #334155;
+      background: #0b1222;
+      font-size: 11px;
+      color: #e5e7eb;
+      margin-left: 8px;
+    }
+
+    .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+    .tab {
+      padding: 8px 10px;
+      border-radius: 999px;
+      border: 1px solid #263244;
+      background: #0b1222;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .tab.active { border-color: #3b82f6; }
+
+    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 980px) { .grid { grid-template-columns: 1fr 1fr; } }
+
+    .list { margin: 0; padding: 0; list-style: none; }
+    .list li {
+      padding: 10px 10px;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .list li:last-child { border-bottom: none; }
+    .left { display: flex; flex-direction: column; gap: 4px; }
+    .line1 { font-size: 14px; }
+    .line2 { font-size: 12px; color: #9ca3af; }
+    .right { font-size: 12px; color: #9ca3af; white-space: nowrap; }
+
+    .mutedBox {
+      background: #0b1222;
+      border: 1px dashed #263244;
+      border-radius: 14px;
+      padding: 12px;
+      color: #9ca3af;
+      font-size: 13px;
+    }
+
+    .parList { margin: 0; padding-left: 16px; color: #d1d5db; }
+    .parList li { margin: 4px 0; }
+
+    .footerRow { display:flex; gap: 8px; align-items:center; flex-wrap: wrap; justify-content: space-between; }
+    .pager { display:flex; gap: 8px; align-items:center; flex-wrap: wrap; }
+  </style>
 </head>
 <body>
-  <h1>Checklist Viewer Beta</h1>
-  <p>Repository initialized.</p>
+  <div class="wrap">
+    <div class="card">
+      <div class="row" style="justify-content:space-between;">
+        <div>
+          <div class="h1">Checklist Viewer (Beta)</div>
+          <div class="subtle">Standalone PWA — powered by ChasingMajors data APIs.</div>
+        </div>
+        <div class="pill" id="apiStatus">API: not checked</div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="row">
+        <div style="min-width: 260px;">
+          <div class="subtle" style="margin-bottom:6px;">Apps Script API Base</div>
+          <input id="apiBase" />
+          <div class="subtle" style="margin-top:6px;">Tip: this is stored in your browser (local only).</div>
+        </div>
+
+        <div style="min-width: 220px;">
+          <div class="subtle" style="margin-bottom:6px;">Sport</div>
+          <select id="sport">
+            <option value="baseball">baseball</option>
+            <option value="basketball">basketball</option>
+            <option value="football">football</option>
+            <option value="soccer">soccer</option>
+            <option value="hockey">hockey</option>
+          </select>
+        </div>
+
+        <div style="min-width: 260px;">
+          <div class="subtle" style="margin-bottom:6px;">Product Code</div>
+          <input id="code" placeholder="e.g. 2026_topps_series1" />
+        </div>
+
+        <div style="min-width: 150px;">
+          <div class="subtle" style="margin-bottom:6px;">&nbsp;</div>
+          <button id="loadBtn">Load</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="height: 12px;"></div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;">
+          <div>
+            <div class="h1" id="title">No product loaded</div>
+            <div class="subtle" id="subtitle">Enter a code and click Load.</div>
+          </div>
+          <div class="pill" id="countPill">0 cards</div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="tabs" id="sectionTabs"></div>
+
+        <div style="height: 10px;"></div>
+
+        <div class="row">
+          <div style="min-width: 220px;">
+            <div class="subtle" style="margin-bottom:6px;">Subset</div>
+            <select id="subsetSelect"></select>
+          </div>
+          <div style="min-width: 260px;">
+            <div class="subtle" style="margin-bottom:6px;">Search Player</div>
+            <input id="playerSearch" placeholder="e.g. Judge" />
+          </div>
+          <div style="min-width: 200px;">
+            <div class="subtle" style="margin-bottom:6px;">Tag Filter</div>
+            <select id="tagFilter">
+              <option value="">(none)</option>
+              <option value="RC">RC</option>
+              <option value="LL">LL</option>
+              <option value="RD">RD</option>
+              <option value="SP">SP</option>
+              <option value="SSP">SSP</option>
+            </select>
+          </div>
+          <div style="min-width: 140px;">
+            <div class="subtle" style="margin-bottom:6px;">&nbsp;</div>
+            <button id="applyFiltersBtn">Apply</button>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="footerRow">
+          <div class="subtle" id="resultsMeta">Results: 0</div>
+          <div class="pager">
+            <button id="prevBtn">Prev</button>
+            <span class="subtle" id="pageMeta">Page 1</span>
+            <button id="nextBtn">Next</button>
+          </div>
+        </div>
+
+        <div style="height: 10px;"></div>
+
+        <ul class="list" id="cardList"></ul>
+
+        <div id="emptyState" class="mutedBox" style="display:none; margin-top: 10px;">
+          No results. Try a different section, subset, or filter.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="h1">Parallels</div>
+        <div class="subtle" id="parSub">Load a product to see parallels for the selected section/subset.</div>
+        <div class="divider"></div>
+        <ul class="parList" id="parallelList"></ul>
+
+        <div style="height: 14px;"></div>
+
+        <div class="h1">Debug</div>
+        <div class="subtle">This will help while you’re new to Pages.</div>
+        <div class="divider"></div>
+        <div class="mutedBox" id="debugBox">Ready.</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
 </body>
 </html>
