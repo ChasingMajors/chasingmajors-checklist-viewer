@@ -1,14 +1,17 @@
 const DEFAULT_API_BASE = "https://script.google.com/macros/s/AKfycbz25GxN79WE7PFzb1vT0bsXZBuMp11Qs2vvhJAnH3r3qOrYzYNwp_14n420ml4Bu5t_/exec";
 
 /**
- * UX behavior:
- * - If query is likely a set name, load Set View and show Base checklist by default (higher initial load).
- * - Otherwise, show player search results list (non-clickable).
+ * IMPORTANT:
+ * Your sheet uses section values like:
+ *  Base, Insert, Autograph, Auto Relic, Relic, Variation
  *
- * NOTE: Set detection is:
- *   1) Try Products route first. If it returns anything, pick best match and open that code.
- *   2) If Products is empty, but query looks like a code (contains underscore), treat as code.
- *   3) Fallback to player search.
+ * UI tabs are rollups:
+ *  Inserts tab = Insert
+ *  Autographs tab = Autograph + Auto Relic
+ *  Relics tab = Relic
+ *  Variations tab = Variation
+ *
+ * Base Parallels uses Parallels tab (section=Base subset=[Base])
  */
 
 const state = {
@@ -26,13 +29,26 @@ const state = {
   setCode: "",
   setSummary: null,
   activeTab: "Base",
-  // for Base checklist paging
+
+  // base paging
   baseOffset: 0,
-  baseLimit: 150,          // higher initial load for product search
+  baseLimit: 150,
   baseTotal: 0,
 };
 
 const TAB_ORDER = ["Base", "Base Parallels", "Inserts", "Autographs", "Relics", "Variations"];
+
+// Map UI tab -> one or more sheet section values
+const TAB_TO_SECTIONS = {
+  "Base": ["Base"],
+  "Inserts": ["Insert"],
+  "Autographs": ["Autograph", "Auto Relic"],
+  "Relics": ["Relic"],
+  "Variations": ["Variation"],
+};
+
+// NOTE: Parallels route supports (section, subset) and (section only).
+// We’ll do per-subset parallels by filtering in UI if your Parallels sheet has applies_to_subset/subset columns.
 
 const $ = (id) => document.getElementById(id);
 
@@ -192,21 +208,29 @@ async function doMoreSearch() {
    SET VIEW
 ---------------------------- */
 
-function secCount(sectionName) {
-  const sec = (state.setSummary?.sections || []).find(x => x.section === sectionName);
-  return sec ? (sec.count || 0) : 0;
+function getTabSections(tabName) {
+  if (tabName === "Base Parallels") return ["Base"];
+  return TAB_TO_SECTIONS[tabName] || [tabName];
 }
 
-function setSetHeader() {
-  $("setTitle").textContent = `${state.activeTab === "Base Parallels" ? "Base Parallels" : state.activeTab} — ${state.activeTab === "Base Parallels" ? "" : ""}`.trim();
+function setSetHeader(countOverride) {
   $("setCode").textContent = state.setCode;
 
-  // For Base: show total base cards for the product (from summary/Base section count)
-  if (state.activeTab === "Base" || state.activeTab === "Base Parallels") {
-    $("setMeta").textContent = `${secCount("Base")} Cards`;
-  } else {
-    $("setMeta").textContent = `${secCount(state.activeTab)} Cards`;
+  const title = (state.activeTab === "Base") ? "Base Checklist"
+              : (state.activeTab === "Base Parallels") ? "Base Parallels"
+              : `${state.activeTab}`;
+
+  $("setTitle").textContent = title;
+
+  if (typeof countOverride === "number") {
+    $("setMeta").textContent = `${countOverride} Cards`;
+    return;
   }
+
+  // fallback: use summary if it happens to match exactly
+  const sec = (state.setSummary?.sections || []).find(x => x.section === state.activeTab);
+  const n = sec?.count || 0;
+  $("setMeta").textContent = `${n} Cards`;
 }
 
 function renderSetTabs() {
@@ -220,7 +244,7 @@ function renderSetTabs() {
     b.onclick = async () => {
       state.activeTab = t;
       renderSetTabs();
-      setSetHeader();
+      $("setBody").innerHTML = `<div class="r"><div class="rTop">Loading…</div></div>`;
       await renderActiveTab();
     };
     el.appendChild(b);
@@ -244,8 +268,7 @@ async function fetchParallelsFor(section, subset /* optional */) {
   return j.items || [];
 }
 
-async function fetchAllCardsForSection(section) {
-  // Pull all pages (limit capped to 500 server-side)
+async function fetchAllCardsForSection(sectionValue) {
   const all = [];
   let offset = 0;
   const limit = 500;
@@ -254,7 +277,7 @@ async function fetchAllCardsForSection(section) {
     const j = await fetchJson("cards", {
       sport: state.sport,
       code: state.setCode,
-      section,
+      section: sectionValue,
       limit,
       offset
     });
@@ -267,9 +290,7 @@ async function fetchAllCardsForSection(section) {
     const total = j.total || 0;
     offset += limit;
     if (all.length >= total) break;
-
-    // Safety: don’t spin forever if sheet has weird totals
-    if (offset > 20000) break;
+    if (offset > 30000) break; // safety
   }
 
   return all;
@@ -283,8 +304,6 @@ function groupBySubset(items) {
     map.get(subset).push(it);
   });
 
-  // Stable-ish ordering:
-  // - Put [Base] first if present (for Base section), otherwise alpha
   const keys = Array.from(map.keys());
   keys.sort((a, b) => {
     if (a === "[Base]") return -1;
@@ -298,14 +317,12 @@ function groupBySubset(items) {
 function renderSubsetBlock(subsetName, cards, parallels) {
   const count = cards.length;
 
-  // Cards list: for non-base sections, usually player-only is best.
-  // If card_no exists and is meaningful, include it.
   const playersHtml = cards.map(c => {
     const player = String(c.player || "").trim();
     const cardNo = String(c.card_no || "").trim();
     const tags = tagsToBadges(c.tags);
 
-    const line = (cardNo && cardNo !== "0")
+    const line = (cardNo && cardNo !== "0" && cardNo !== "[n/a]")
       ? `${escapeHtml(cardNo)} ${escapeHtml(player)}${tags}`
       : `${escapeHtml(player)}${tags}`;
 
@@ -330,7 +347,6 @@ async function renderBaseChecklist() {
   const body = $("setBody");
   body.innerHTML = `<div class="r"><div class="rTop">Loading Base checklist…</div><div class="rSub">Pulling cards…</div></div>`;
 
-  // Base checklist: show [Base] subset within Base section, with higher initial load
   state.baseOffset = 0;
 
   const j = await fetchJson("cards", {
@@ -348,9 +364,9 @@ async function renderBaseChecklist() {
   }
 
   state.baseTotal = j.total || 0;
-  const items = j.items || [];
+  setSetHeader(state.baseTotal);
 
-  // Base parallels list comes from Parallels tab for section=Base subset=[Base]
+  const items = j.items || [];
   const parallels = await fetchParallelsFor("Base", "[Base]");
 
   const parallelsHtml = parallels.length
@@ -365,13 +381,11 @@ async function renderBaseChecklist() {
     return `<div class="r"><div class="rTop">${cardNo} ${player} — ${team}${tags}</div></div>`;
   }).join("");
 
-  const moreBtn = (state.baseLimit + state.baseOffset < state.baseTotal)
-    ? `<div class="btnRow"><button id="moreBase" class="btnGhost">Show more Base cards</button><div class="pill">${items.length} / ${state.baseTotal}</div></div>`
-    : `<div class="btnRow"><div class="pill">${items.length} / ${state.baseTotal}</div></div>`;
+  const moreBtn = (state.baseOffset + state.baseLimit < state.baseTotal)
+    ? `<div class="btnRow"><button id="moreBase" class="btnGhost">Show more Base cards</button><div class="pill">${Math.min(items.length, state.baseTotal)} / ${state.baseTotal}</div></div>`
+    : `<div class="btnRow"><div class="pill">${Math.min(items.length, state.baseTotal)} / ${state.baseTotal}</div></div>`;
 
   body.innerHTML = `
-    <div class="setHeaderSub">Base Checklist</div>
-    <div class="setHeaderSub">${state.baseTotal} Cards</div>
     ${parallelsHtml}
     <div class="resultsBox" style="margin-top:12px;">${listHtml || `<div class="r"><div class="rTop">No cards found.</div></div>`}</div>
     ${moreBtn}
@@ -409,9 +423,7 @@ async function renderBaseChecklist() {
       const pill = body.querySelector(".btnRow .pill");
       if (pill) pill.textContent = `${shown} / ${state.baseTotal}`;
 
-      if (shown >= state.baseTotal) {
-        more.remove();
-      }
+      if (shown >= state.baseTotal) more.remove();
     };
   }
 }
@@ -421,40 +433,60 @@ async function renderBaseParallelsOnly() {
   body.innerHTML = `<div class="r"><div class="rTop">Loading Base parallels…</div></div>`;
 
   const parallels = await fetchParallelsFor("Base", "[Base]");
+  setSetHeader(state.baseTotal || undefined);
 
   body.innerHTML = parallels.length
     ? `<div class="parTitle">Parallels:</div><ul class="par">${parallels.map(p => `<li>${escapeHtml(formatParallelLine(p))}</li>`).join("")}</ul>`
     : `<div class="parTitle">Parallels:</div><ul class="par"><li>None listed.</li></ul>`;
 }
 
-async function renderGroupedSection(sectionName) {
+async function renderRolledUpSection(tabName) {
   const body = $("setBody");
-  body.innerHTML = `<div class="r"><div class="rTop">Loading ${escapeHtml(sectionName)}…</div><div class="rSub">This may take a moment for large sections.</div></div>`;
+  body.innerHTML = `<div class="r"><div class="rTop">Loading ${escapeHtml(tabName)}…</div><div class="rSub">Grouping by subset…</div></div>`;
 
-  // Fetch all cards for that section (paged)
-  const cards = await fetchAllCardsForSection(sectionName);
+  const sections = getTabSections(tabName);
 
-  // Fetch all parallels for that section (no subset filter)
-  const parallelsAll = await fetchParallelsFor(sectionName, "");
+  // Fetch all cards across underlying sections, then merge
+  const allCards = [];
+  for (const sec of sections) {
+    const items = await fetchAllCardsForSection(sec);
+    allCards.push(...items.map(x => ({ ...x, __source_section: sec })));
+  }
+
+  // Count override
+  setSetHeader(allCards.length);
+
+  if (!allCards.length) {
+    body.innerHTML = `<div class="r"><div class="rTop">No cards found in ${escapeHtml(tabName)}.</div><div class="rSub">Expected section values: ${escapeHtml(sections.join(", "))}</div></div>`;
+    return;
+  }
+
+  // Fetch parallels for the “display section”
+  // Use the tabName as the logical group, but we have to ask the API using actual section names.
+  // We'll pull parallels for each underlying section and merge.
+  const allPars = [];
+  for (const sec of sections) {
+    const pars = await fetchParallelsFor(sec, "");
+    allPars.push(...pars.map(p => ({ ...p, __source_section: sec })));
+  }
 
   // Group cards by subset
-  const grouped = groupBySubset(cards);
+  const grouped = groupBySubset(allCards);
 
-  // Group parallels by subset too
+  // Build parallels map by subset (best effort). If your parallels rows have a subset column, use it.
   const parBySubset = new Map();
-  parallelsAll.forEach(p => {
+  allPars.forEach(p => {
     const subset = String(p.applies_to_subset || p.subset || "[Unspecified]").trim() || "[Unspecified]";
     if (!parBySubset.has(subset)) parBySubset.set(subset, []);
     parBySubset.get(subset).push(p);
   });
 
-  // Render blocks
   const html = grouped.map(g => {
     const pars = parBySubset.get(g.subset) || [];
     return renderSubsetBlock(g.subset, g.items, pars);
   }).join("");
 
-  body.innerHTML = html || `<div class="r"><div class="rTop">No cards found in ${escapeHtml(sectionName)}.</div></div>`;
+  body.innerHTML = html;
 }
 
 async function renderActiveTab() {
@@ -463,8 +495,7 @@ async function renderActiveTab() {
   if (state.activeTab === "Base") return renderBaseChecklist();
   if (state.activeTab === "Base Parallels") return renderBaseParallelsOnly();
 
-  // Other sections: group by subset and show parallels + players
-  return renderGroupedSection(state.activeTab);
+  return renderRolledUpSection(state.activeTab);
 }
 
 async function openSetByCode(code) {
@@ -484,10 +515,15 @@ async function openSetByCode(code) {
   }
 
   state.setSummary = j;
+  state.baseTotal = secCountFromSummary("Base"); // for header use
 
   renderSetTabs();
-  setSetHeader();
   await renderActiveTab();
+}
+
+function secCountFromSummary(sectionName) {
+  const sec = (state.setSummary?.sections || []).find(x => x.section === sectionName);
+  return sec ? (sec.count || 0) : 0;
 }
 
 /* ---------------------------
@@ -495,20 +531,17 @@ async function openSetByCode(code) {
 ---------------------------- */
 
 function looksLikeCode(q) {
-  // very light heuristic
   const s = String(q || "").trim();
   return s.includes("_") && s.length >= 8;
 }
 
 async function tryOpenSetFromProducts(q) {
-  // If Products tab isn't populated, this will return empty and we’ll fallback.
   const j = await fetchJson("products", { sport: state.sport, q });
   if (!j.ok) return false;
 
   const items = j.items || [];
   if (!items.length) return false;
 
-  // pick first/best match
   const code = String(items[0].code || "").trim();
   if (!code) return false;
 
@@ -530,21 +563,20 @@ async function doSearch() {
 
   await checkHealth();
 
-  // Reset search paging UI
+  // reset search paging UI
   state.searchOffset = 0;
   state.searchShown = 0;
   state.searchHasMore = false;
   $("moreSearch").style.display = "none";
   $("countPill").style.display = "none";
 
-  // Try set first (product name), then fallback
   $("searchResults").style.display = "block";
   $("searchResults").innerHTML = `<div class="r"><div class="rTop">Searching…</div><div class="rSub">${escapeHtml(state.q)}</div></div>`;
 
+  // Try product lookup first
   const opened = await tryOpenSetFromProducts(state.q);
 
   if (!opened && looksLikeCode(state.q)) {
-    // treat as code
     await openSetByCode(state.q);
     return;
   }
@@ -554,12 +586,6 @@ async function doSearch() {
   // Fallback: player search list
   showSearchUI();
   await searchCardsPage(false);
-}
-
-async function doBackToSearch() {
-  $("setView").style.display = "none";
-  $("searchResults").style.display = "block";
-  $("backToSearch").style.display = "none";
 }
 
 /* ---------------------------
@@ -579,7 +605,6 @@ function wire() {
   $("moreSearch").onclick = doMoreSearch;
 
   $("backToSearch").onclick = () => {
-    // just hides set view; leaves results as they were
     $("setView").style.display = "none";
     $("searchResults").style.display = "block";
     $("backToSearch").style.display = "none";
