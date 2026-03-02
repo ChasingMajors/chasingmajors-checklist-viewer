@@ -1,4 +1,4 @@
-const CACHE = "cm-checklist-beta-v6";
+const CACHE = "cm-checklist-beta-v7";
 const ASSETS = [
   "./",
   "./index.html",
