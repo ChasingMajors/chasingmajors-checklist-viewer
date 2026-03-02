@@ -47,9 +47,6 @@ const TAB_TO_SECTIONS = {
   "Variations": ["Variation"],
 };
 
-// NOTE: Parallels route supports (section, subset) and (section only).
-// We’ll do per-subset parallels by filtering in UI if your Parallels sheet has applies_to_subset/subset columns.
-
 const $ = (id) => document.getElementById(id);
 
 function normalizeApiBase(url) {
@@ -91,6 +88,64 @@ function tagsToBadges(tagsCell) {
   const tags = t.split("|").map(x => x.trim().toUpperCase()).filter(Boolean);
   return tags.map(x => `<span class="badge">${escapeHtml(x)}</span>`).join("");
 }
+
+/* ---------------------------
+   NATURAL SORTING (fixes 1,10,100)
+---------------------------- */
+
+function normalizeCardNo(s) {
+  return String(s || "").trim();
+}
+
+// Natural compare: "1" < "2" < "10", and "T91-2" < "T91-10"
+function naturalCompare(a, b) {
+  const ax = String(a || "").toUpperCase().match(/(\d+|\D+)/g) || [];
+  const bx = String(b || "").toUpperCase().match(/(\d+|\D+)/g) || [];
+
+  const n = Math.max(ax.length, bx.length);
+  for (let i = 0; i < n; i++) {
+    const x = ax[i] ?? "";
+    const y = bx[i] ?? "";
+
+    const xNum = /^\d+$/.test(x);
+    const yNum = /^\d+$/.test(y);
+
+    if (xNum && yNum) {
+      const xi = parseInt(x, 10);
+      const yi = parseInt(y, 10);
+      if (xi !== yi) return xi - yi;
+      // tie-breaker: fewer leading zeros first
+      if (x.length !== y.length) return x.length - y.length;
+    } else {
+      if (x !== y) return x < y ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+function compareCardsByCardNo(a, b) {
+  const ac = normalizeCardNo(a?.card_no);
+  const bc = normalizeCardNo(b?.card_no);
+
+  // push blanks to the end
+  if (!ac && !bc) return 0;
+  if (!ac) return 1;
+  if (!bc) return -1;
+
+  const c = naturalCompare(ac, bc);
+  if (c !== 0) return c;
+
+  // stable-ish tie breaker
+  const ap = String(a?.player || "").toUpperCase();
+  const bp = String(b?.player || "").toUpperCase();
+  if (ap !== bp) return ap < bp ? -1 : 1;
+
+  return 0;
+}
+
+/* ---------------------------
+   API status
+---------------------------- */
 
 function setApi(ok, text) {
   const el = $("apiPill");
@@ -179,7 +234,9 @@ async function searchCardsPage(append) {
     return;
   }
 
-  const items = j.items || [];
+  const items = (j.items || []).slice();
+  items.sort(compareCardsByCardNo);
+
   if (!append) state.searchShown = 0;
 
   if (!items.length && !append) {
@@ -311,34 +368,64 @@ function groupBySubset(items) {
     return a.localeCompare(b);
   });
 
-  return keys.map(k => ({ subset: k, items: map.get(k) }));
+  // sort cards within each subset naturally by card_no
+  return keys.map(k => {
+    const arr = map.get(k) || [];
+    arr.sort(compareCardsByCardNo);
+    return { subset: k, items: arr };
+  });
 }
 
-function renderSubsetBlock(subsetName, cards, parallels) {
+/**
+ * Renders a subset block with:
+ * - subset title (slightly larger if isAutoTab)
+ * - count line
+ * - blank line
+ * - Parallels (bulleted)
+ * - blank line
+ * - Checklist rows (NOT bulleted)
+ */
+function renderSubsetBlock(subsetName, cards, parallels, opts = {}) {
   const count = cards.length;
+  const isAutoTab = !!opts.isAutoTab;
 
-  const playersHtml = cards.map(c => {
-    const player = String(c.player || "").trim();
-    const cardNo = String(c.card_no || "").trim();
-    const tags = tagsToBadges(c.tags);
-
-    const line = (cardNo && cardNo !== "0" && cardNo !== "[n/a]")
-      ? `${escapeHtml(cardNo)} ${escapeHtml(player)}${tags}`
-      : `${escapeHtml(player)}${tags}`;
-
-    return `<li>${line}</li>`;
-  }).join("");
+  const subsetTitleStyle = isAutoTab
+    ? `style="font-size:16px; font-weight:950; margin-top:12px;"`
+    : "";
 
   const parallelsHtml = parallels.length
-    ? `<div class="parTitle">Parallels:</div><ul class="par">${parallels.map(p => `<li>${escapeHtml(formatParallelLine(p))}</li>`).join("")}</ul>`
-    : `<div class="parTitle">Parallels:</div><ul class="par"><li>None listed.</li></ul>`;
+    ? `<div class="parTitle" style="margin-top:10px;">Parallels:</div>
+       <ul class="par" style="margin-top:6px;">${parallels.map(p => `<li>${escapeHtml(formatParallelLine(p))}</li>`).join("")}</ul>`
+    : `<div class="parTitle" style="margin-top:10px;">Parallels:</div>
+       <ul class="par" style="margin-top:6px;"><li>None listed.</li></ul>`;
+
+  const checklistHtml = (cards || []).map(c => {
+    const cardNo = String(c.card_no || "").trim();
+    const player = String(c.player || "").trim();
+    const team = String(c.team || "").trim();
+    const tags = tagsToBadges(c.tags);
+
+    const left = cardNo ? `${escapeHtml(cardNo)} ` : "";
+    const mid = player ? escapeHtml(player) : "";
+    const right = team ? ` — ${escapeHtml(team)}` : "";
+
+    return `<div class="r"><div class="rTop">${left}${mid}${right}${tags}</div></div>`;
+  }).join("");
 
   return `
     <div class="sectionBlock">
-      <div class="subsetTitle">${escapeHtml(subsetName)}</div>
+      <div class="subsetTitle" ${subsetTitleStyle}>${escapeHtml(subsetName)}</div>
       <div class="subsetMeta">${count} Cards</div>
+
+      <div style="height:8px;"></div>
+
       ${parallelsHtml}
-      <ul class="players">${playersHtml || "<li>No cards found.</li>"}</ul>
+
+      <div style="height:10px;"></div>
+
+      <div class="resultsBox">
+        ${checklistHtml || `<div class="r"><div class="rTop">No cards found.</div></div>`}
+      </div>
     </div>
   `;
 }
@@ -366,7 +453,9 @@ async function renderBaseChecklist() {
   state.baseTotal = j.total || 0;
   setSetHeader(state.baseTotal);
 
-  const items = j.items || [];
+  const items = (j.items || []).slice();
+  items.sort(compareCardsByCardNo);
+
   const parallels = await fetchParallelsFor("Base", "[Base]");
 
   const parallelsHtml = parallels.length
@@ -387,7 +476,8 @@ async function renderBaseChecklist() {
 
   body.innerHTML = `
     ${parallelsHtml}
-    <div class="resultsBox" style="margin-top:12px;">${listHtml || `<div class="r"><div class="rTop">No cards found.</div></div>`}</div>
+    <div style="height:10px;"></div>
+    <div class="resultsBox">${listHtml || `<div class="r"><div class="rTop">No cards found.</div></div>`}</div>
     ${moreBtn}
   `;
 
@@ -407,7 +497,9 @@ async function renderBaseChecklist() {
 
       if (!j2.ok) return;
 
-      const items2 = j2.items || [];
+      const items2 = (j2.items || []).slice();
+      items2.sort(compareCardsByCardNo);
+
       const addHtml = items2.map(it => {
         const cardNo = escapeHtml(it.card_no || "");
         const player = escapeHtml(it.player || "");
@@ -461,9 +553,7 @@ async function renderRolledUpSection(tabName) {
     return;
   }
 
-  // Fetch parallels for the “display section”
-  // Use the tabName as the logical group, but we have to ask the API using actual section names.
-  // We'll pull parallels for each underlying section and merge.
+  // Fetch parallels for each underlying section and merge (best effort)
   const allPars = [];
   for (const sec of sections) {
     const pars = await fetchParallelsFor(sec, "");
@@ -481,9 +571,26 @@ async function renderRolledUpSection(tabName) {
     parBySubset.get(subset).push(p);
   });
 
+  // optional: sort parallels in a stable way (name then serial)
+  for (const [k, arr] of parBySubset.entries()) {
+    arr.sort((a, b) => {
+      const an = String(a.parallel_name || "").toUpperCase();
+      const bn = String(b.parallel_name || "").toUpperCase();
+      if (an !== bn) return an < bn ? -1 : 1;
+
+      const asn = String(a.serial_no || "").toUpperCase();
+      const bsn = String(b.serial_no || "").toUpperCase();
+      if (asn !== bsn) return asn < bsn ? -1 : 1;
+      return 0;
+    });
+    parBySubset.set(k, arr);
+  }
+
+  const isAutoTab = tabName === "Autographs";
+
   const html = grouped.map(g => {
     const pars = parBySubset.get(g.subset) || [];
-    return renderSubsetBlock(g.subset, g.items, pars);
+    return renderSubsetBlock(g.subset, g.items, pars, { isAutoTab });
   }).join("");
 
   body.innerHTML = html;
