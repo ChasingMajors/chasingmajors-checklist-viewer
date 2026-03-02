@@ -1,37 +1,26 @@
-/* Checklist Viewer (Beta) */
-
-const DEFAULT_API_BASE =
-  "https://script.google.com/macros/s/AKfycbyZbd_9POsLRLA4jydnDrSTibj7L_BE2zmS9ia0eCSG76LFLojXd8ZBp9E5Y-5DmvJm/exec";
+const DEFAULT_API_BASE = "https://script.google.com/macros/s/AKfycbyZbd_9POsLRLA4jydnDrSTibj7L_BE2zmS9ia0eCSG76LFLojXd8ZBp9E5Y-5DmvJm/exec";
 
 const state = {
   apiBase: "",
   sport: "baseball",
+  mode: "products",
+
+  // product viewer state
   code: "",
   summary: null,
-
   section: "",
-  subset: "",
+  subset: "[Base]",
   player: "",
   tag: "",
-
   limit: 100,
   offset: 0,
   total: 0,
+
+  // global cards search pagination
+  globalOffset: 0
 };
 
-function $(id) {
-  return document.getElementById(id);
-}
-
-function setDebug(msg) {
-  $("debugBox").textContent = msg;
-}
-
-function setApiStatus(ok, text) {
-  const el = $("apiStatus");
-  el.textContent = text;
-  el.style.borderColor = ok ? "#10b981" : "#ef4444";
-}
+const $ = (id) => document.getElementById(id);
 
 function normalizeApiBase(url) {
   const s = String(url || "").trim();
@@ -51,120 +40,118 @@ function qs(params) {
 }
 
 async function fetchJson(route, params) {
-  const base = state.apiBase;
-  const url = `${base}?${qs({ route, ...params })}`;
-  setDebug(`GET ${url}`);
+  const url = `${state.apiBase}?${qs({ route, ...params })}`;
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
 
-function tagsToBadges(tagsCell) {
-  const t = String(tagsCell || "").trim();
-  if (!t) return [];
-  return t
-    .split("|")
-    .map(x => x.trim().toUpperCase())
-    .filter(Boolean);
-}
-
-function renderBadges(tagsCell) {
-  const tags = tagsToBadges(tagsCell);
-  if (!tags.length) return "";
-  return tags.map(t => `<span class="badge">${t}</span>`).join("");
-}
-
-function formatCardLine(item) {
-  const cardNo = String(item.card_no ?? "").trim();
-  const player = String(item.player ?? "").trim();
-  const team = String(item.team ?? "").trim();
-  const subset = String(item.subset ?? "").trim();
-  const notes = String(item.notes ?? "").trim();
-
-  const line1 = `${escapeHtml(cardNo)} ${escapeHtml(player)} — ${escapeHtml(team)}${renderBadges(item.tags)}`;
-  const line2 = [subset, notes].filter(Boolean).map(escapeHtml).join(" • ");
-
-  return { line1, line2 };
-}
-
-function escapeHtml(s) {
-  return String(s || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-/* ---------- UI Wiring ---------- */
-
-function loadLocalDefaults() {
-  const savedBase = localStorage.getItem("cm_api_base");
-  $("apiBase").value = savedBase || DEFAULT_API_BASE;
-  state.apiBase = normalizeApiBase($("apiBase").value);
-
-  const savedSport = localStorage.getItem("cm_sport");
-  if (savedSport) $("sport").value = savedSport;
-
-  const savedCode = localStorage.getItem("cm_code");
-  if (savedCode) $("code").value = savedCode;
+function setApi(ok, text) {
+  const el = $("apiPill");
+  el.textContent = text;
+  el.style.borderColor = ok ? "#10b981" : "#ef4444";
 }
 
 async function checkHealth() {
   try {
-    const apiBase = normalizeApiBase($("apiBase").value);
-    state.apiBase = apiBase;
-    localStorage.setItem("cm_api_base", apiBase);
-
     const j = await fetchJson("health", {});
-    if (j && j.ok) {
-      setApiStatus(true, "API: OK");
-      return true;
-    }
-    setApiStatus(false, "API: error");
-    return false;
-  } catch (e) {
-    setApiStatus(false, "API: offline");
-    setDebug(String(e));
-    return false;
+    setApi(!!j.ok, j.ok ? "API: OK" : "API: error");
+  } catch {
+    setApi(false, "API: offline");
   }
 }
 
-function renderSectionTabs() {
-  const tabsEl = $("sectionTabs");
-  tabsEl.innerHTML = "";
+function saveLocal() {
+  localStorage.setItem("cm_api_base", state.apiBase);
+  localStorage.setItem("cm_sport", state.sport);
+}
 
-  const sections = state.summary?.sections || [];
-  if (!sections.length) return;
+function loadLocal() {
+  state.apiBase = normalizeApiBase(localStorage.getItem("cm_api_base") || DEFAULT_API_BASE);
+  state.sport = localStorage.getItem("cm_sport") || "baseball";
+  $("apiBase").value = state.apiBase;
+  $("sport").value = state.sport;
+}
 
-  sections.forEach(s => {
-    const btn = document.createElement("button");
-    btn.className = "tab" + (s.section === state.section ? " active" : "");
-    btn.textContent = `${s.section} (${s.count})`;
-    btn.onclick = async () => {
+function showResults(items, renderer) {
+  const box = $("searchResults");
+  if (!items.length) {
+    box.style.display = "block";
+    box.innerHTML = `<div class="r"><div class="rTop">No results</div><div class="rSub">Try different keywords.</div></div>`;
+    return;
+  }
+  box.style.display = "block";
+  box.innerHTML = items.map(renderer).join("");
+}
+
+function hideResults() {
+  const box = $("searchResults");
+  box.style.display = "none";
+  box.innerHTML = "";
+}
+
+function escapeHtml(s) {
+  return String(s || "")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
+}
+
+function tagsToBadges(tagsCell) {
+  const t = String(tagsCell || "").trim();
+  if (!t) return "";
+  const tags = t.split("|").map(x => x.trim().toUpperCase()).filter(Boolean);
+  return tags.map(x => `<span class="badge">${escapeHtml(x)}</span>`).join("");
+}
+
+function setViewerVisible(on) {
+  $("viewer").style.display = on ? "block" : "none";
+  $("emptyViewer").style.display = on ? "none" : "block";
+}
+
+function setViewerHeader() {
+  const secObj = (state.summary?.sections || []).find(x => x.section === state.section);
+  const secCount = secObj?.count || 0;
+
+  $("viewerTitle").textContent = `${state.section} Checklist`;
+  $("viewerSub").textContent = `${secCount} Cards`;
+  $("viewerCode").textContent = state.code;
+}
+
+function renderTabs() {
+  const el = $("sectionTabs");
+  el.innerHTML = "";
+  (state.summary?.sections || []).forEach(s => {
+    const b = document.createElement("button");
+    b.className = "tab" + (s.section === state.section ? " active" : "");
+    b.textContent = `${s.section}`;
+    b.onclick = async () => {
       state.section = s.section;
       state.offset = 0;
-      renderSectionTabs();
-      renderSubsetDropdown();
-      await refreshParallels();
-      await refreshCards();
+      state.subset = "[Base]"; // default; will be replaced if not present
+      renderTabs();
+      renderSubset();
+      setViewerHeader();
+      await loadParallels();
+      await loadCards();
     };
-    tabsEl.appendChild(btn);
+    el.appendChild(b);
   });
 }
 
-function renderSubsetDropdown() {
-  const sel = $("subsetSelect");
+function renderSubset() {
+  const sel = $("subset");
   sel.innerHTML = "";
 
-  const sectionObj = (state.summary?.sections || []).find(x => x.section === state.section);
-  const subsets = sectionObj?.subsets || [];
+  const secObj = (state.summary?.sections || []).find(x => x.section === state.section);
+  const subsets = secObj?.subsets || [];
 
-  // Always include an "All subsets" option
-  const optAll = document.createElement("option");
-  optAll.value = "";
-  optAll.textContent = "(All subsets)";
-  sel.appendChild(optAll);
+  // If [Base] exists, default to it; otherwise default to first subset
+  const hasBase = subsets.some(x => x.subset === "[Base]");
+  const defaultSubset = hasBase ? "[Base]" : (subsets[0]?.subset || "[Base]");
+  if (!state.subset) state.subset = defaultSubset;
 
   subsets.forEach(s => {
     const opt = document.createElement("option");
@@ -173,212 +160,284 @@ function renderSubsetDropdown() {
     sel.appendChild(opt);
   });
 
-  sel.value = state.subset || "";
+  sel.value = state.subset;
   sel.onchange = async () => {
     state.subset = sel.value;
     state.offset = 0;
-    await refreshParallels();
-    await refreshCards();
+    await loadParallels();
+    await loadCards();
   };
 }
 
-function setHeaderCounts() {
-  const sectionObj = (state.summary?.sections || []).find(x => x.section === state.section);
-  const sectionCount = sectionObj?.count || 0;
+async function loadParallels() {
+  const ul = $("parallels");
+  ul.innerHTML = "<li>Loading…</li>";
 
-  $("title").textContent = `${state.section || "Checklist"} Checklist`;
-  $("subtitle").textContent = state.code ? `${state.code} • ${state.sport}` : "Enter a code and click Load.";
-  $("countPill").textContent = `${sectionCount} cards`;
-}
+  const j = await fetchJson("parallels", {
+    sport: state.sport,
+    code: state.code,
+    section: state.section,
+    subset: state.subset
+  });
 
-function renderParallels(items) {
-  const ul = $("parallelList");
-  ul.innerHTML = "";
-
-  if (!items || !items.length) {
-    $("parSub").textContent = "No parallels found for the current selection.";
+  if (!j.ok) {
+    ul.innerHTML = "<li>No parallels found.</li>";
     return;
   }
 
-  $("parSub").textContent = "Parallels for the current section/subset:";
-
-  items.forEach(p => {
-    const li = document.createElement("li");
-    const name = String(p.parallel_name || "").trim();
-    const sn = String(p.serial_no || "").trim();
-    li.textContent = sn ? `${name} ${sn}` : name;
-    ul.appendChild(li);
-  });
-}
-
-function renderCards(items) {
-  const ul = $("cardList");
-  ul.innerHTML = "";
-
-  if (!items || !items.length) {
-    $("emptyState").style.display = "block";
+  const items = j.items || [];
+  if (!items.length) {
+    ul.innerHTML = "<li>None listed.</li>";
     return;
   }
-  $("emptyState").style.display = "none";
 
-  items.forEach(it => {
-    const { line1, line2 } = formatCardLine(it);
-
-    const li = document.createElement("li");
-    li.innerHTML = `
-      <div class="left">
-        <div class="line1">${line1}</div>
-        ${line2 ? `<div class="line2">${line2}</div>` : ""}
-      </div>
-      <div class="right">${escapeHtml(String(it.section || ""))}</div>
-    `;
-    ul.appendChild(li);
-  });
+  ul.innerHTML = items.map(p => {
+    const name = escapeHtml(p.parallel_name || "");
+    const sn = escapeHtml(p.serial_no || "");
+    return `<li>${sn ? `${name} ${sn}` : name}</li>`;
+  }).join("");
 }
 
-function setPaginationMeta() {
+function setPaging() {
   const page = Math.floor(state.offset / state.limit) + 1;
   const totalPages = Math.max(1, Math.ceil((state.total || 0) / state.limit));
-
   $("pageMeta").textContent = `Page ${page} of ${totalPages}`;
   $("resultsMeta").textContent = `Results: ${state.total}`;
-
-  $("prevBtn").disabled = state.offset <= 0;
-  $("nextBtn").disabled = state.offset + state.limit >= (state.total || 0);
+  $("prev").disabled = state.offset <= 0;
+  $("next").disabled = state.offset + state.limit >= (state.total || 0);
 }
 
-async function refreshParallels() {
-  try {
-    const j = await fetchJson("parallels", {
-      sport: state.sport,
-      code: state.code,
-      section: state.section,
-      subset: state.subset || "" // blank allowed
-    });
+async function loadCards() {
+  const ul = $("cards");
+  ul.innerHTML = "<li>Loading…</li>";
 
-    if (!j.ok) throw new Error(j.error || "parallels error");
-    renderParallels(j.items || []);
-  } catch (e) {
-    renderParallels([]);
-    setDebug("Parallels error: " + String(e));
-  }
-}
+  const j = await fetchJson("cards", {
+    sport: state.sport,
+    code: state.code,
+    section: state.section,
+    subset: state.subset,
+    player: state.player,
+    tag: state.tag,
+    limit: state.limit,
+    offset: state.offset
+  });
 
-async function refreshCards() {
-  try {
-    const j = await fetchJson("cards", {
-      sport: state.sport,
-      code: state.code,
-      section: state.section,
-      subset: state.subset || "",
-      player: state.player || "",
-      tag: state.tag || "",
-      limit: state.limit,
-      offset: state.offset
-    });
-
-    if (!j.ok) throw new Error(j.error || "cards error");
-
-    state.total = j.total || 0;
-    renderCards(j.items || []);
-    setPaginationMeta();
-  } catch (e) {
-    state.total = 0;
-    renderCards([]);
-    setPaginationMeta();
-    setDebug("Cards error: " + String(e));
-  }
-}
-
-async function loadProduct() {
-  state.sport = $("sport").value;
-  state.code = $("code").value.trim();
-  state.apiBase = normalizeApiBase($("apiBase").value);
-
-  localStorage.setItem("cm_sport", state.sport);
-  localStorage.setItem("cm_code", state.code);
-  localStorage.setItem("cm_api_base", state.apiBase);
-
-  if (!state.code) {
-    setDebug("Enter a product code.");
+  if (!j.ok) {
+    ul.innerHTML = `<li>Load failed.</li>`;
     return;
   }
 
-  const ok = await checkHealth();
-  if (!ok) return;
+  state.total = j.total || 0;
+  setPaging();
 
-  try {
-    const j = await fetchJson("summary", { sport: state.sport, code: state.code });
-    if (!j.ok) throw new Error(j.error || "summary error");
+  const items = j.items || [];
+  if (!items.length) {
+    ul.innerHTML = `<li>No results.</li>`;
+    return;
+  }
 
-    state.summary = j;
+  ul.innerHTML = items.map(it => {
+    const cardNo = escapeHtml(it.card_no || "");
+    const player = escapeHtml(it.player || "");
+    const team = escapeHtml(it.team || "");
+    const badge = tagsToBadges(it.tags);
+    return `<li><div class="line">${cardNo} ${player} — ${team}${badge}</div></li>`;
+  }).join("");
+}
 
-    // Default section = first ordered section
-    const firstSection = j.sections?.[0]?.section || "Base";
-    state.section = firstSection;
-    state.subset = "";
-    state.player = "";
-    state.tag = "";
+async function loadProductByCode(code) {
+  state.code = code;
+  state.offset = 0;
+  state.player = "";
+  state.tag = "";
+  $("playerFilter").value = "";
+  $("tag").value = "";
+
+  const j = await fetchJson("summary", { sport: state.sport, code: state.code });
+  if (!j.ok) throw new Error(j.error || "summary error");
+
+  state.summary = j;
+  state.section = j.sections?.[0]?.section || "Base";
+
+  setViewerVisible(true);
+  setViewerHeader();
+  renderTabs();
+  renderSubset();
+  await loadParallels();
+  await loadCards();
+}
+
+/* -----------------------
+   SEARCH
+----------------------- */
+
+async function searchProducts(q) {
+  // Uses your existing route=products (in your sport workbook)
+  const j = await fetchJson("products", { sport: state.sport, q });
+  if (!j.ok) return [];
+
+  // Prefer items that have release_name. Fallback to code.
+  return (j.items || []).slice(0, 20).map(x => ({
+    code: x.code,
+    title: x.release_name || x.product || x.code,
+    sub: [x.year, x.manufacturer, x.product].filter(Boolean).join(" • ")
+  }));
+}
+
+async function searchCardsGlobal(q) {
+  // NEW route=search_cards
+  const j = await fetchJson("search_cards", { sport: state.sport, q, limit: 25, offset: state.globalOffset });
+  if (!j.ok) return { items: [], has_more: false };
+
+  const items = (j.items || []).map(x => ({
+    code: x.code,
+    line: `${x.card_no} ${x.player} — ${x.team}`,
+    sub: `${x.section} • ${x.subset}`,
+    tags: x.tags || ""
+  }));
+
+  return { items, has_more: !!j.has_more };
+}
+
+async function doSearch() {
+  hideResults();
+
+  state.sport = $("sport").value;
+  state.mode = $("mode").value;
+  state.apiBase = normalizeApiBase($("apiBase").value);
+  saveLocal();
+
+  if (!state.apiBase) return;
+
+  const q = $("search").value.trim();
+  if (!q) return;
+
+  await checkHealth();
+
+  if (state.mode === "products") {
+    const items = await searchProducts(q);
+    showResults(items, (it, idx) => `
+      <div class="r" data-idx="${idx}">
+        <div class="rTop">${escapeHtml(it.title)}</div>
+        <div class="rSub">${escapeHtml(it.sub)} • code=${escapeHtml(it.code)}</div>
+      </div>
+    `);
+
+    // click handler
+    $("searchResults").onclick = async (ev) => {
+      const row = ev.target.closest(".r");
+      if (!row) return;
+      const idx = Number(row.getAttribute("data-idx"));
+      const pick = items[idx];
+      if (!pick) return;
+      hideResults();
+      await loadProductByCode(pick.code);
+    };
+
+    return;
+  }
+
+  // cards mode (global)
+  state.globalOffset = 0;
+  const { items, has_more } = await searchCardsGlobal(q);
+
+  showResults(items, (it, idx) => `
+    <div class="r" data-idx="${idx}">
+      <div class="rTop">${escapeHtml(it.line)}${tagsToBadges(it.tags)}</div>
+      <div class="rSub">${escapeHtml(it.sub)} • code=${escapeHtml(it.code)}</div>
+    </div>
+  `);
+
+  $("searchResults").onclick = async (ev) => {
+    const row = ev.target.closest(".r");
+    if (!row) return;
+    const idx = Number(row.getAttribute("data-idx"));
+    const pick = items[idx];
+    if (!pick) return;
+
+    hideResults();
+
+    // Jump into the product, and auto-filter player (best-effort)
+    await loadProductByCode(pick.code);
+    const parts = pick.line.split("—")[0].trim(); // "1 Aaron Judge"
+    const maybeName = parts.replace(/^\S+\s+/, "").trim(); // remove card_no
+    $("playerFilter").value = maybeName;
+    state.player = maybeName;
     state.offset = 0;
+    await loadCards();
+  };
 
-    $("playerSearch").value = "";
-    $("tagFilter").value = "";
-
-    renderSectionTabs();
-    renderSubsetDropdown();
-    setHeaderCounts();
-
-    await refreshParallels();
-    await refreshCards();
-  } catch (e) {
-    setDebug("Summary error: " + String(e));
-    state.summary = null;
-    $("title").textContent = "Load failed";
-    $("subtitle").textContent = "Check the code and try again.";
-    $("countPill").textContent = "0 cards";
-    $("sectionTabs").innerHTML = "";
-    $("subsetSelect").innerHTML = "";
-    renderParallels([]);
-    renderCards([]);
+  // If there are more results, add a "load more" row
+  if (has_more) {
+    const box = $("searchResults");
+    const more = document.createElement("div");
+    more.className = "r";
+    more.innerHTML = `<div class="rTop">Load more results…</div><div class="rSub">Continue searching in this sport.</div>`;
+    more.onclick = async () => {
+      state.globalOffset += 25;
+      const next = await searchCardsGlobal(q);
+      const existing = box.innerHTML;
+      box.innerHTML = existing + next.items.map((it, idx) => `
+        <div class="r" data-idx="${items.length + idx}">
+          <div class="rTop">${escapeHtml(it.line)}${tagsToBadges(it.tags)}</div>
+          <div class="rSub">${escapeHtml(it.sub)} • code=${escapeHtml(it.code)}</div>
+        </div>
+      `).join("");
+      items.push(...next.items);
+    };
+    box.appendChild(more);
   }
 }
 
-function wireEvents() {
-  $("loadBtn").onclick = loadProduct;
+/* -----------------------
+   Viewer actions
+----------------------- */
 
-  $("apiBase").addEventListener("change", checkHealth);
+function wire() {
+  $("apiBase").addEventListener("change", async () => {
+    state.apiBase = normalizeApiBase($("apiBase").value);
+    saveLocal();
+    await checkHealth();
+  });
 
-  $("applyFiltersBtn").onclick = async () => {
-    state.player = $("playerSearch").value.trim();
-    state.tag = $("tagFilter").value.trim();
+  $("go").onclick = doSearch;
+
+  $("search").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") doSearch();
+  });
+
+  $("apply").onclick = async () => {
+    state.player = $("playerFilter").value.trim();
+    state.tag = $("tag").value.trim();
     state.offset = 0;
-    await refreshCards();
+    await loadCards();
   };
 
-  $("prevBtn").onclick = async () => {
+  $("prev").onclick = async () => {
     state.offset = Math.max(0, state.offset - state.limit);
-    await refreshCards();
+    await loadCards();
   };
 
-  $("nextBtn").onclick = async () => {
+  $("next").onclick = async () => {
     state.offset = state.offset + state.limit;
-    await refreshCards();
+    await loadCards();
   };
 }
 
-/* ---------- PWA ---------- */
+/* -----------------------
+   Init + PWA
+----------------------- */
+
 async function registerSW() {
   if (!("serviceWorker" in navigator)) return;
-  try {
-    await navigator.serviceWorker.register("./sw.js");
-  } catch (e) {
-    // non-fatal
-  }
+  try { await navigator.serviceWorker.register("./sw.js"); } catch {}
 }
 
 (async function init() {
-  loadLocalDefaults();
-  wireEvents();
+  loadLocal();
+  state.apiBase = normalizeApiBase($("apiBase").value);
+  saveLocal();
+  wire();
   await checkHealth();
   await registerSW();
 })();
