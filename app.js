@@ -1,17 +1,18 @@
 const DEFAULT_API_BASE = "https://script.google.com/macros/s/AKfycbz25GxN79WE7PFzb1vT0bsXZBuMp11Qs2vvhJAnH3r3qOrYzYNwp_14n420ml4Bu5t_/exec";
 
 /**
- * IMPORTANT:
- * Your sheet uses section values like:
+ * Sheet section values:
  *  Base, Insert, Autograph, Auto Relic, Relic, Variation
  *
- * UI tabs are rollups:
+ * UI tabs rollups:
  *  Inserts tab = Insert
  *  Autographs tab = Autograph + Auto Relic
  *  Relics tab = Relic
  *  Variations tab = Variation
  *
- * Base Parallels uses Parallels tab (section=Base subset=[Base])
+ * IMPORTANT CHANGE:
+ *  Base checklist should NOT filter by subset="[Base]" because many sheets leave subset blank
+ *  for base cards. Filtering causes missing card numbers (3–9, etc.).
  */
 
 const state = {
@@ -114,8 +115,7 @@ function naturalCompare(a, b) {
       const xi = parseInt(x, 10);
       const yi = parseInt(y, 10);
       if (xi !== yi) return xi - yi;
-      // tie-breaker: fewer leading zeros first
-      if (x.length !== y.length) return x.length - y.length;
+      if (x.length !== y.length) return x.length - y.length; // fewer leading zeros first
     } else {
       if (x !== y) return x < y ? -1 : 1;
     }
@@ -127,7 +127,6 @@ function compareCardsByCardNo(a, b) {
   const ac = normalizeCardNo(a?.card_no);
   const bc = normalizeCardNo(b?.card_no);
 
-  // push blanks to the end
   if (!ac && !bc) return 0;
   if (!ac) return 1;
   if (!bc) return -1;
@@ -135,7 +134,6 @@ function compareCardsByCardNo(a, b) {
   const c = naturalCompare(ac, bc);
   if (c !== 0) return c;
 
-  // stable-ish tie breaker
   const ap = String(a?.player || "").toUpperCase();
   const bp = String(b?.player || "").toUpperCase();
   if (ap !== bp) return ap < bp ? -1 : 1;
@@ -284,7 +282,6 @@ function setSetHeader(countOverride) {
     return;
   }
 
-  // fallback: use summary if it happens to match exactly
   const sec = (state.setSummary?.sections || []).find(x => x.section === state.activeTab);
   const n = sec?.count || 0;
   $("setMeta").textContent = `${n} Cards`;
@@ -347,7 +344,7 @@ async function fetchAllCardsForSection(sectionValue) {
     const total = j.total || 0;
     offset += limit;
     if (all.length >= total) break;
-    if (offset > 30000) break; // safety
+    if (offset > 30000) break;
   }
 
   return all;
@@ -368,7 +365,6 @@ function groupBySubset(items) {
     return a.localeCompare(b);
   });
 
-  // sort cards within each subset naturally by card_no
   return keys.map(k => {
     const arr = map.get(k) || [];
     arr.sort(compareCardsByCardNo);
@@ -377,21 +373,19 @@ function groupBySubset(items) {
 }
 
 /**
- * Renders a subset block with:
- * - subset title (slightly larger if isAutoTab)
- * - count line
- * - blank line
- * - Parallels (bulleted)
- * - blank line
- * - Checklist rows (NOT bulleted)
+ * UX changes:
+ * - Subset title larger (+2px overall)
+ * - Autographs subset title even larger (+2px more)
+ * - Parallels same font size as checklist (handled mostly by CSS, but also keep simple)
+ * - Blank space between count and "Parallels:", and between parallels and checklist rows
+ * - Checklist rows NOT bulleted
  */
 function renderSubsetBlock(subsetName, cards, parallels, opts = {}) {
   const count = cards.length;
   const isAutoTab = !!opts.isAutoTab;
 
-  const subsetTitleStyle = isAutoTab
-    ? `style="font-size:16px; font-weight:950; margin-top:12px;"`
-    : "";
+  // +2px from prior appearance; autographs +2px more
+  const subsetTitleSize = isAutoTab ? 18 : 16;
 
   const parallelsHtml = parallels.length
     ? `<div class="parTitle" style="margin-top:10px;">Parallels:</div>
@@ -414,14 +408,14 @@ function renderSubsetBlock(subsetName, cards, parallels, opts = {}) {
 
   return `
     <div class="sectionBlock">
-      <div class="subsetTitle" ${subsetTitleStyle}>${escapeHtml(subsetName)}</div>
+      <div class="subsetTitle" style="font-size:${subsetTitleSize}px; font-weight:950; margin-top:12px;">${escapeHtml(subsetName)}</div>
       <div class="subsetMeta">${count} Cards</div>
 
-      <div style="height:8px;"></div>
+      <div style="height:10px;"></div>
 
       ${parallelsHtml}
 
-      <div style="height:10px;"></div>
+      <div style="height:12px;"></div>
 
       <div class="resultsBox">
         ${checklistHtml || `<div class="r"><div class="rTop">No cards found.</div></div>`}
@@ -436,11 +430,11 @@ async function renderBaseChecklist() {
 
   state.baseOffset = 0;
 
+  // IMPORTANT: removed subset="[Base]" filter to prevent missing card numbers
   const j = await fetchJson("cards", {
     sport: state.sport,
     code: state.setCode,
     section: "Base",
-    subset: "[Base]",
     limit: state.baseLimit,
     offset: state.baseOffset
   });
@@ -456,6 +450,7 @@ async function renderBaseChecklist() {
   const items = (j.items || []).slice();
   items.sort(compareCardsByCardNo);
 
+  // Parallels: keep targeting Base + [Base] by default; if your data doesn't use [Base], switch to subset:""
   const parallels = await fetchParallelsFor("Base", "[Base]");
 
   const parallelsHtml = parallels.length
@@ -490,7 +485,6 @@ async function renderBaseChecklist() {
         sport: state.sport,
         code: state.setCode,
         section: "Base",
-        subset: "[Base]",
         limit: state.baseLimit,
         offset: state.baseOffset
       });
@@ -538,14 +532,12 @@ async function renderRolledUpSection(tabName) {
 
   const sections = getTabSections(tabName);
 
-  // Fetch all cards across underlying sections, then merge
   const allCards = [];
   for (const sec of sections) {
     const items = await fetchAllCardsForSection(sec);
     allCards.push(...items.map(x => ({ ...x, __source_section: sec })));
   }
 
-  // Count override
   setSetHeader(allCards.length);
 
   if (!allCards.length) {
@@ -553,17 +545,14 @@ async function renderRolledUpSection(tabName) {
     return;
   }
 
-  // Fetch parallels for each underlying section and merge (best effort)
   const allPars = [];
   for (const sec of sections) {
     const pars = await fetchParallelsFor(sec, "");
     allPars.push(...pars.map(p => ({ ...p, __source_section: sec })));
   }
 
-  // Group cards by subset
   const grouped = groupBySubset(allCards);
 
-  // Build parallels map by subset (best effort). If your parallels rows have a subset column, use it.
   const parBySubset = new Map();
   allPars.forEach(p => {
     const subset = String(p.applies_to_subset || p.subset || "[Unspecified]").trim() || "[Unspecified]";
@@ -571,7 +560,6 @@ async function renderRolledUpSection(tabName) {
     parBySubset.get(subset).push(p);
   });
 
-  // optional: sort parallels in a stable way (name then serial)
   for (const [k, arr] of parBySubset.entries()) {
     arr.sort((a, b) => {
       const an = String(a.parallel_name || "").toUpperCase();
@@ -622,7 +610,7 @@ async function openSetByCode(code) {
   }
 
   state.setSummary = j;
-  state.baseTotal = secCountFromSummary("Base"); // for header use
+  state.baseTotal = secCountFromSummary("Base");
 
   renderSetTabs();
   await renderActiveTab();
@@ -670,7 +658,6 @@ async function doSearch() {
 
   await checkHealth();
 
-  // reset search paging UI
   state.searchOffset = 0;
   state.searchShown = 0;
   state.searchHasMore = false;
@@ -680,7 +667,6 @@ async function doSearch() {
   $("searchResults").style.display = "block";
   $("searchResults").innerHTML = `<div class="r"><div class="rTop">Searching…</div><div class="rSub">${escapeHtml(state.q)}</div></div>`;
 
-  // Try product lookup first
   const opened = await tryOpenSetFromProducts(state.q);
 
   if (!opened && looksLikeCode(state.q)) {
@@ -690,7 +676,6 @@ async function doSearch() {
 
   if (opened) return;
 
-  // Fallback: player search list
   showSearchUI();
   await searchCardsPage(false);
 }
