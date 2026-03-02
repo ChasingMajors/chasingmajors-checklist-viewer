@@ -44,33 +44,24 @@
     button { cursor: pointer; }
     button:hover { border-color: #3b82f6; }
     .divider { height:1px; background:#1f2937; margin: 12px 0; }
-    .tabs { display:flex; gap:8px; flex-wrap: wrap; }
-    .tab { padding: 7px 10px; border-radius: 999px; border: 1px solid #263244; background:#0b1222; cursor:pointer; font-size: 13px; }
-    .tab.active { border-color:#3b82f6; }
-    .list { margin:0; padding:0; list-style:none; }
-    .list li { padding: 10px 0; border-bottom: 1px solid #1f2937; }
-    .list li:last-child { border-bottom: none; }
-    .line { font-size: 14px; }
-    .meta { color:#9ca3af; font-size: 12px; margin-top: 4px; }
+
+    .resultsBox { margin-top: 10px; border: 1px solid #1f2937; border-radius: 12px; overflow:hidden; }
+    .resultsBox .r { padding: 10px 12px; border-bottom: 1px solid #1f2937; }
+    .resultsBox .r:last-child { border-bottom:none; }
+    .rTop { font-size: 14px; }
+    .rSub { font-size: 12px; color:#9ca3af; margin-top: 3px; }
+
     .badge {
       display:inline-flex; padding:2px 7px; border-radius: 999px;
       border:1px solid #334155; background:#0b1222;
       font-size: 11px; margin-left: 8px; color:#e5e7eb;
     }
-    .sectionTitle { font-size: 16px; font-weight: 800; }
-    .parTitle { margin-top: 10px; font-weight: 800; }
-    ul.par { margin: 6px 0 0 0; padding-left: 16px; color:#d1d5db; }
-    ul.par li { margin: 4px 0; }
 
-    .resultsBox { margin-top: 10px; border: 1px solid #1f2937; border-radius: 12px; overflow:hidden; }
-    .resultsBox .r { padding: 10px 12px; border-bottom: 1px solid #1f2937; cursor:pointer; }
-    .resultsBox .r:last-child { border-bottom:none; }
-    .resultsBox .r:hover { background:#0b1222; }
-    .rTop { font-size: 14px; }
-    .rSub { font-size: 12px; color:#9ca3af; margin-top: 3px; }
+    .btnRow { display:flex; gap:10px; flex-wrap:wrap; margin-top: 10px; }
+    .btnGhost { background:#0b1222; }
+    .btnPrimary { border-color:#3b82f6; }
 
-    .footerRow { display:flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items:center; }
-    .pager { display:flex; gap:8px; align-items:center; }
+    .hint { margin-top: 10px; color:#9ca3af; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -79,8 +70,8 @@
     <div class="card">
       <div class="row" style="justify-content:space-between;">
         <div>
-          <div class="h1">Checklist (Beta)</div>
-          <div class="sub">One search bar. Find sets or find players. Built for mobile first.</div>
+          <div class="h1">Checklist Viewer (Beta)</div>
+          <div class="sub">Search sets or players. Clean output. No click-through.</div>
         </div>
         <div class="pill" id="apiPill">API: not checked</div>
       </div>
@@ -96,16 +87,11 @@
           <option value="hockey">hockey</option>
         </select>
 
-        <select id="mode" style="flex:0 0 140px;">
-          <option value="products">Products</option>
-          <option value="cards">Cards</option>
-        </select>
-
-        <div style="flex:1 1 280px;">
+        <div style="flex:1 1 320px;">
           <input id="search" placeholder="Search: 2026 Topps Series 1 … or Aaron Judge …" />
         </div>
 
-        <button id="go" style="flex:0 0 90px;">Search</button>
+        <button id="go" style="flex:0 0 90px;" class="btnPrimary">Search</button>
       </div>
 
       <div class="sub" style="margin-top:8px;">
@@ -113,59 +99,16 @@
         <input id="apiBase" style="margin-top:6px;" />
       </div>
 
+      <div class="btnRow">
+        <button id="more" class="btnGhost" style="display:none;">Show more</button>
+        <div class="pill" id="countPill" style="display:none;">0 results</div>
+      </div>
+
       <div id="searchResults" class="resultsBox" style="display:none;"></div>
-    </div>
 
-    <div style="height: 12px;"></div>
-
-    <div class="card" id="viewer" style="display:none;">
-      <div class="row" style="justify-content:space-between;">
-        <div>
-          <div class="sectionTitle" id="viewerTitle">Base Checklist</div>
-          <div class="sub" id="viewerSub">0 Cards</div>
-        </div>
-        <div class="pill" id="viewerCode">code</div>
+      <div class="hint">
+        Tip: tags come from Cards.tags using the format <b>RC|LL|RD|SP|SSP</b>.
       </div>
-
-      <div class="divider"></div>
-
-      <div class="tabs" id="sectionTabs"></div>
-
-      <div class="divider"></div>
-
-      <div class="row">
-        <select id="subset" style="flex:1 1 240px;"></select>
-        <input id="playerFilter" placeholder="Filter inside this product (player name) …" style="flex:1 1 240px;" />
-        <select id="tag" style="flex:0 0 120px;">
-          <option value="">Tag</option>
-          <option value="RC">RC</option>
-          <option value="LL">LL</option>
-          <option value="RD">RD</option>
-          <option value="SP">SP</option>
-          <option value="SSP">SSP</option>
-        </select>
-        <button id="apply" style="flex:0 0 90px;">Apply</button>
-      </div>
-
-      <div class="parTitle">Parallels:</div>
-      <ul class="par" id="parallels"></ul>
-
-      <div class="divider"></div>
-
-      <div class="footerRow">
-        <div class="sub" id="resultsMeta">Results: 0</div>
-        <div class="pager">
-          <button id="prev">Prev</button>
-          <span class="sub" id="pageMeta">Page 1</span>
-          <button id="next">Next</button>
-        </div>
-      </div>
-
-      <ul class="list" id="cards"></ul>
-    </div>
-
-    <div class="card" id="emptyViewer" style="display:block;">
-      <div class="sub">Search for a product (Products mode) or a player (Cards mode) to begin.</div>
     </div>
 
   </div>
