@@ -1,4 +1,4 @@
-const CACHE = "cm-checklist-beta-v1";
+const CACHE = "cm-checklist-beta-v2";
 const ASSETS = ["./", "./index.html", "./app.js", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
