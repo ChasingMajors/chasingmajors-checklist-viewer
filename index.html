@@ -87,12 +87,10 @@
     .setHeaderTitle { font-size: 16px; font-weight: 900; }
     .setHeaderSub { color:#9ca3af; font-size: 13px; margin-top: 4px; }
     .sectionBlock { margin-top: 14px; }
-
-    /* subset names are handled inline in app.js (font-size), but keep class for spacing */
     .subsetTitle { font-weight: 900; margin-top: 12px; }
     .subsetMeta { color:#9ca3af; font-size: 12px; margin-top: 2px; }
 
-    /* Parallels: match checklist font size */
+    /* Parallels font matches checklist */
     .parTitle { margin-top: 8px; font-weight: 900; font-size: 14px; }
     ul.par { margin: 6px 0 0 0; padding-left: 16px; color:#d1d5db; font-size: 14px; }
     ul.par li { margin: 4px 0; font-size: 14px; }
@@ -110,7 +108,7 @@
           <div class="h1">Checklist Viewer (Beta)</div>
           <div class="sub">Search a set (e.g., “2026 Topps Series 1”) or a player (e.g., “Aaron Judge”).</div>
         </div>
-        <div class="pill" id="apiPill">API: not checked</div>
+        <div class="pill" id="apiPill">API: checking…</div>
       </div>
 
       <div class="divider"></div>
@@ -131,18 +129,13 @@
         <button id="go" style="flex:0 0 90px;" class="btnPrimary">Search</button>
       </div>
 
-      <div class="sub" style="margin-top:8px;">
-        API Base (stored locally):
-        <input id="apiBase" style="margin-top:6px;" />
-      </div>
-
       <div class="btnRow">
         <button id="backToSearch" class="btnGhost" style="display:none;">Back to search</button>
         <button id="moreSearch" class="btnGhost" style="display:none;">Show more</button>
         <div class="pill" id="countPill" style="display:none;">0 results</div>
       </div>
 
-      <!-- Search results (player search mode) -->
+      <!-- Search results -->
       <div id="searchResults" class="resultsBox" style="display:none;"></div>
 
       <div class="hint">
