@@ -14,7 +14,7 @@
       background: #0b0f19;
       color: #e5e7eb;
     }
-    .wrap { max-width: 860px; margin: 0 auto; padding: 14px; }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 14px; }
     .card {
       background: #0f172a;
       border: 1px solid #1f2937;
@@ -45,6 +45,28 @@
     button:hover { border-color: #3b82f6; }
     .divider { height:1px; background:#1f2937; margin: 12px 0; }
 
+    /* Tabs */
+    .tabs {
+      display:flex;
+      gap:8px;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .tab {
+      white-space: nowrap;
+      padding: 7px 10px;
+      border-radius: 999px;
+      border: 1px solid #263244;
+      background:#0b1222;
+      cursor:pointer;
+      font-size: 13px;
+      flex: 0 0 auto;
+    }
+    .tab.active { border-color:#3b82f6; }
+
+    /* Results list */
     .resultsBox { margin-top: 10px; border: 1px solid #1f2937; border-radius: 12px; overflow:hidden; }
     .resultsBox .r { padding: 10px 12px; border-bottom: 1px solid #1f2937; }
     .resultsBox .r:last-child { border-bottom:none; }
@@ -61,17 +83,32 @@
     .btnGhost { background:#0b1222; }
     .btnPrimary { border-color:#3b82f6; }
 
+    /* Set view */
+    .setHeaderTitle { font-size: 16px; font-weight: 900; }
+    .setHeaderSub { color:#9ca3af; font-size: 13px; margin-top: 4px; }
+    .sectionBlock { margin-top: 14px; }
+    .subsetTitle { font-weight: 900; margin-top: 12px; }
+    .subsetMeta { color:#9ca3af; font-size: 12px; margin-top: 2px; }
+
+    .parTitle { margin-top: 8px; font-weight: 900; }
+    ul.par { margin: 6px 0 0 0; padding-left: 16px; color:#d1d5db; }
+    ul.par li { margin: 4px 0; }
+
+    ul.players { margin: 8px 0 0 0; padding-left: 16px; color:#e5e7eb; }
+    ul.players li { margin: 4px 0; }
+
     .hint { margin-top: 10px; color:#9ca3af; font-size: 12px; }
   </style>
 </head>
 <body>
   <div class="wrap">
 
+    <!-- Search card -->
     <div class="card">
       <div class="row" style="justify-content:space-between;">
         <div>
           <div class="h1">Checklist Viewer (Beta)</div>
-          <div class="sub">Search sets or players. Clean output. No click-through.</div>
+          <div class="sub">Search a set (e.g., “2026 Topps Series 1”) or a player (e.g., “Aaron Judge”).</div>
         </div>
         <div class="pill" id="apiPill">API: not checked</div>
       </div>
@@ -88,7 +125,7 @@
         </select>
 
         <div style="flex:1 1 320px;">
-          <input id="search" placeholder="Search: 2026 Topps Series 1 … or Aaron Judge …" />
+          <input id="search" placeholder="Search…" />
         </div>
 
         <button id="go" style="flex:0 0 90px;" class="btnPrimary">Search</button>
@@ -100,15 +137,36 @@
       </div>
 
       <div class="btnRow">
-        <button id="more" class="btnGhost" style="display:none;">Show more</button>
+        <button id="backToSearch" class="btnGhost" style="display:none;">Back to search</button>
+        <button id="moreSearch" class="btnGhost" style="display:none;">Show more</button>
         <div class="pill" id="countPill" style="display:none;">0 results</div>
       </div>
 
+      <!-- Search results (player search mode) -->
       <div id="searchResults" class="resultsBox" style="display:none;"></div>
 
       <div class="hint">
-        Tip: tags come from Cards.tags using the format <b>RC|LL|RD|SP|SSP</b>.
+        Tags come from <b>Cards.tags</b> using <b>RC|LL|RD|SP|SSP</b>.
       </div>
+    </div>
+
+    <div style="height:12px;"></div>
+
+    <!-- Set viewer card -->
+    <div class="card" id="setView" style="display:none;">
+      <div class="row" style="justify-content:space-between;">
+        <div>
+          <div class="setHeaderTitle" id="setTitle">Base Checklist</div>
+          <div class="setHeaderSub" id="setMeta">Loading…</div>
+        </div>
+        <div class="pill" id="setCode">code</div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="tabs" id="setTabs"></div>
+
+      <div id="setBody"></div>
     </div>
 
   </div>
