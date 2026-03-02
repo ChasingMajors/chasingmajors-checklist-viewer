@@ -67,7 +67,7 @@
     .tab.active { border-color:#3b82f6; }
 
     /* Results list */
-    .resultsBox { margin-top: 10px; border: 1px solid #1f2937; border-radius: 12px; overflow:hidden; }
+    .resultsBox { margin-top: 10px; border: 1px solid #1f2937; border-radius: 12px; overflow:hidden; background:#0b1222; }
     .resultsBox .r { padding: 10px 12px; border-bottom: 1px solid #1f2937; }
     .resultsBox .r:last-child { border-bottom:none; }
     .rTop { font-size: 14px; }
@@ -87,15 +87,15 @@
     .setHeaderTitle { font-size: 16px; font-weight: 900; }
     .setHeaderSub { color:#9ca3af; font-size: 13px; margin-top: 4px; }
     .sectionBlock { margin-top: 14px; }
+
+    /* subset names are handled inline in app.js (font-size), but keep class for spacing */
     .subsetTitle { font-weight: 900; margin-top: 12px; }
     .subsetMeta { color:#9ca3af; font-size: 12px; margin-top: 2px; }
 
-    .parTitle { margin-top: 8px; font-weight: 900; }
-    ul.par { margin: 6px 0 0 0; padding-left: 16px; color:#d1d5db; }
-    ul.par li { margin: 4px 0; }
-
-    ul.players { margin: 8px 0 0 0; padding-left: 16px; color:#e5e7eb; }
-    ul.players li { margin: 4px 0; }
+    /* Parallels: match checklist font size */
+    .parTitle { margin-top: 8px; font-weight: 900; font-size: 14px; }
+    ul.par { margin: 6px 0 0 0; padding-left: 16px; color:#d1d5db; font-size: 14px; }
+    ul.par li { margin: 4px 0; font-size: 14px; }
 
     .hint { margin-top: 10px; color:#9ca3af; font-size: 12px; }
   </style>
@@ -117,11 +117,11 @@
 
       <div class="row">
         <select id="sport" style="flex:0 0 150px;">
-          <option value="baseball">baseball</option>
-          <option value="basketball">basketball</option>
-          <option value="football">football</option>
-          <option value="soccer">soccer</option>
-          <option value="hockey">hockey</option>
+          <option value="baseball">Baseball</option>
+          <option value="basketball">Basketball</option>
+          <option value="football">Football</option>
+          <option value="soccer">Soccer</option>
+          <option value="hockey">Hockey</option>
         </select>
 
         <div style="flex:1 1 320px;">
