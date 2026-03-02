@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE = "https://script.google.com/macros/s/AKfycbyZbd_9POsLRLA4jydnDrSTibj7L_BE2zmS9ia0eCSG76LFLojXd8ZBp9E5Y-5DmvJm/exec";
+const DEFAULT_API_BASE = "https://script.google.com/macros/s/AKfycbx5-vZ8fR-ypA9ypfYDK42HTQ2XR5bSJcPsqmUrMPbHz0QA9CAvOOABgHyIlVP6ZuvY/exec";
 
 const state = {
   apiBase: "",
