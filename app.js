@@ -10,13 +10,13 @@ const DEFAULT_API_BASE = "https://script.google.com/macros/s/AKfycbz25GxN79WE7PF
  *  Relics tab = Relic
  *  Variations tab = Variation
  *
- * IMPORTANT CHANGE:
+ * IMPORTANT:
  *  Base checklist should NOT filter by subset="[Base]" because many sheets leave subset blank
  *  for base cards. Filtering causes missing card numbers (3–9, etc.).
  */
 
 const state = {
-  apiBase: "",
+  apiBase: DEFAULT_API_BASE,
   sport: "baseball",
 
   // search
@@ -147,6 +147,7 @@ function compareCardsByCardNo(a, b) {
 
 function setApi(ok, text) {
   const el = $("apiPill");
+  if (!el) return;
   el.textContent = text;
   el.style.borderColor = ok ? "#10b981" : "#ef4444";
 }
@@ -160,16 +161,19 @@ async function checkHealth() {
   }
 }
 
+/* ---------------------------
+   Local storage (sport only)
+---------------------------- */
+
 function saveLocal() {
-  localStorage.setItem("cm_api_base", state.apiBase);
   localStorage.setItem("cm_sport", state.sport);
 }
 
 function loadLocal() {
-  state.apiBase = normalizeApiBase(localStorage.getItem("cm_api_base") || DEFAULT_API_BASE);
+  state.apiBase = normalizeApiBase(DEFAULT_API_BASE);
   state.sport = localStorage.getItem("cm_sport") || "baseball";
-  $("apiBase").value = state.apiBase;
-  $("sport").value = state.sport;
+  const sportEl = $("sport");
+  if (sportEl) sportEl.value = state.sport;
 }
 
 function showSearchUI() {
@@ -376,7 +380,6 @@ function groupBySubset(items) {
  * UX changes:
  * - Subset title larger (+2px overall)
  * - Autographs subset title even larger (+2px more)
- * - Parallels same font size as checklist (handled mostly by CSS, but also keep simple)
  * - Blank space between count and "Parallels:", and between parallels and checklist rows
  * - Checklist rows NOT bulleted
  */
@@ -384,7 +387,7 @@ function renderSubsetBlock(subsetName, cards, parallels, opts = {}) {
   const count = cards.length;
   const isAutoTab = !!opts.isAutoTab;
 
-  // +2px from prior appearance; autographs +2px more
+  // Relics/Inserts/Variations: 16px (was 14-ish); Autographs: 18px
   const subsetTitleSize = isAutoTab ? 18 : 16;
 
   const parallelsHtml = parallels.length
@@ -430,7 +433,7 @@ async function renderBaseChecklist() {
 
   state.baseOffset = 0;
 
-  // IMPORTANT: removed subset="[Base]" filter to prevent missing card numbers
+  // IMPORTANT: removed subset filter for Base
   const j = await fetchJson("cards", {
     sport: state.sport,
     code: state.setCode,
@@ -450,7 +453,8 @@ async function renderBaseChecklist() {
   const items = (j.items || []).slice();
   items.sort(compareCardsByCardNo);
 
-  // Parallels: keep targeting Base + [Base] by default; if your data doesn't use [Base], switch to subset:""
+  // Parallels: keep targeting Base + [Base] if your parallels use that marker.
+  // If you find parallels missing, switch this to: await fetchParallelsFor("Base", "")
   const parallels = await fetchParallelsFor("Base", "[Base]");
 
   const parallelsHtml = parallels.length
@@ -650,7 +654,6 @@ async function tryOpenSetFromProducts(q) {
 
 async function doSearch() {
   state.sport = $("sport").value;
-  state.apiBase = normalizeApiBase($("apiBase").value);
   saveLocal();
 
   state.q = $("search").value.trim();
@@ -685,12 +688,6 @@ async function doSearch() {
 ---------------------------- */
 
 function wire() {
-  $("apiBase").addEventListener("change", async () => {
-    state.apiBase = normalizeApiBase($("apiBase").value);
-    saveLocal();
-    await checkHealth();
-  });
-
   $("go").onclick = doSearch;
   $("search").addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
 
@@ -709,9 +706,8 @@ async function registerSW() {
 }
 
 (async function init() {
+  state.apiBase = normalizeApiBase(DEFAULT_API_BASE);
   loadLocal();
-  state.apiBase = normalizeApiBase($("apiBase").value);
-  saveLocal();
   wire();
   await checkHealth();
   await registerSW();
