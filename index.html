@@ -8,6 +8,8 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <style>
     :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+
     body {
       margin: 0;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
@@ -22,6 +24,7 @@
       padding: 14px;
       box-shadow: 0 6px 18px rgba(0,0,0,.25);
     }
+
     .row { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
     .h1 { font-size: 18px; font-weight: 800; margin: 0; }
     .sub { color:#9ca3af; font-size: 13px; margin-top: 4px; }
@@ -30,7 +33,9 @@
       padding: 5px 10px; border-radius: 999px;
       border: 1px solid #263244; background: #0b1222;
       font-size: 12px; color: #d1d5db;
+      white-space: nowrap;
     }
+
     input, select, button {
       background: #0b1222;
       border: 1px solid #263244;
@@ -39,6 +44,7 @@
       padding: 11px 12px;
       font-size: 14px;
       outline: none;
+      min-width: 0;
     }
     input { width: 100%; }
     button { cursor: pointer; }
@@ -67,7 +73,13 @@
     .tab.active { border-color:#3b82f6; }
 
     /* Results list */
-    .resultsBox { margin-top: 10px; border: 1px solid #1f2937; border-radius: 12px; overflow:hidden; background:#0b1222; }
+    .resultsBox {
+      margin-top: 10px;
+      border: 1px solid #1f2937;
+      border-radius: 12px;
+      overflow:hidden;
+      background:#0b1222;
+    }
     .resultsBox .r { padding: 10px 12px; border-bottom: 1px solid #1f2937; }
     .resultsBox .r:last-child { border-bottom:none; }
     .rTop { font-size: 14px; }
@@ -96,7 +108,7 @@
     ul.par li { margin: 4px 0; font-size: 14px; }
 
     /* Typeahead dropdown */
-    .typeaheadWrap { position: relative; flex: 1 1 320px; min-width: 240px; }
+    .typeaheadWrap { position: relative; flex: 1 1 0; min-width: 0; }
     .typeaheadList {
       position: absolute;
       left: 0; right: 0;
@@ -121,6 +133,16 @@
     .typeaheadTitle { font-size: 14px; font-weight: 700; }
     .typeaheadSub { font-size: 12px; color:#9ca3af; margin-top: 2px; }
 
+    /* Search row layout (prevents overlap) */
+    .searchRow { flex-wrap: nowrap; align-items: stretch; }
+    .sportSel { flex: 0 0 150px; }
+    .searchBtn { flex: 0 0 96px; }
+
+    @media (max-width: 560px) {
+      .searchRow { flex-wrap: wrap; }
+      .sportSel { flex: 1 1 140px; }
+      .searchBtn { flex: 1 1 100px; }
+    }
   </style>
 </head>
 <body>
@@ -138,8 +160,8 @@
 
       <div class="divider"></div>
 
-      <div class="row">
-        <select id="sport" style="flex:0 0 150px;">
+      <div class="row searchRow">
+        <select id="sport" class="sportSel">
           <option value="baseball">Baseball</option>
           <option value="basketball">Basketball</option>
           <option value="football">Football</option>
@@ -152,7 +174,7 @@
           <div id="typeahead" class="typeaheadList"></div>
         </div>
 
-        <button id="go" style="flex:0 0 90px;" class="btnPrimary">Search</button>
+        <button id="go" class="btnPrimary searchBtn">Search</button>
       </div>
 
       <div class="btnRow">
@@ -160,7 +182,7 @@
         <div class="pill" id="countPill" style="display:none;">0 results</div>
       </div>
 
-      <!-- Search results (player search mode) -->
+      <!-- Search results (player/subset search mode) -->
       <div id="searchResults" class="resultsBox" style="display:none;"></div>
     </div>
 
