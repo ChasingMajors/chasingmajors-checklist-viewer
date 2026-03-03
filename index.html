@@ -95,7 +95,32 @@
     ul.par { margin: 6px 0 0 0; padding-left: 16px; color:#d1d5db; font-size: 14px; }
     ul.par li { margin: 4px 0; font-size: 14px; }
 
-    .hint { margin-top: 10px; color:#9ca3af; font-size: 12px; }
+    /* Typeahead dropdown */
+    .typeaheadWrap { position: relative; flex: 1 1 320px; min-width: 240px; }
+    .typeaheadList {
+      position: absolute;
+      left: 0; right: 0;
+      top: calc(100% + 6px);
+      z-index: 50;
+      border: 1px solid #263244;
+      background: #0b1222;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 12px 30px rgba(0,0,0,.35);
+      display: none;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+    .typeaheadItem {
+      padding: 10px 12px;
+      border-bottom: 1px solid #1f2937;
+      cursor: pointer;
+    }
+    .typeaheadItem:last-child { border-bottom: none; }
+    .typeaheadItem:hover { background: #0f1b33; }
+    .typeaheadTitle { font-size: 14px; font-weight: 700; }
+    .typeaheadSub { font-size: 12px; color:#9ca3af; margin-top: 2px; }
+
   </style>
 </head>
 <body>
@@ -122,25 +147,21 @@
           <option value="hockey">Hockey</option>
         </select>
 
-        <div style="flex:1 1 320px;">
-          <input id="search" placeholder="Search…" />
+        <div class="typeaheadWrap">
+          <input id="search" placeholder="Search…" autocomplete="off" />
+          <div id="typeahead" class="typeaheadList"></div>
         </div>
 
         <button id="go" style="flex:0 0 90px;" class="btnPrimary">Search</button>
       </div>
 
       <div class="btnRow">
-        <button id="backToSearch" class="btnGhost" style="display:none;">Back to search</button>
         <button id="moreSearch" class="btnGhost" style="display:none;">Show more</button>
         <div class="pill" id="countPill" style="display:none;">0 results</div>
       </div>
 
-      <!-- Search results -->
+      <!-- Search results (player search mode) -->
       <div id="searchResults" class="resultsBox" style="display:none;"></div>
-
-      <div class="hint">
-        Tags come from <b>Cards.tags</b> using <b>RC|LL|RD|SP|SSP</b>.
-      </div>
     </div>
 
     <div style="height:12px;"></div>
