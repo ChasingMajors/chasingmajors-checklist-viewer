@@ -1,22 +1,5 @@
 const DEFAULT_API_BASE = "https://script.google.com/macros/s/AKfycbz25GxN79WE7PFzb1vT0bsXZBuMp11Qs2vvhJAnH3r3qOrYzYNwp_14n420ml4Bu5t_/exec";
 
-/**
- * Sheet section values:
- *  Base, Insert, Autograph, Auto Relic, Relic, Variation
- *
- * UI rollups:
- *  Inserts = Insert
- *  Autographs = Autograph + Auto Relic
- *  Relics = Relic
- *  Variations = Variation
- *
- * FIXES INCLUDED:
- *  - Base: fetch ALL cards, client-sort naturally, client paginate (prevents 1,2,10,100 issues).
- *  - Set suggestions (typeahead) from Products route.
- *  - Hide tabs when counts are 0 (e.g., no Relics/Variations).
- *  - Remove "Back to search" usage.
- */
-
 const state = {
   apiBase: DEFAULT_API_BASE,
   sport: "baseball",
@@ -36,16 +19,17 @@ const state = {
   // base paging (client-side)
   baseOffset: 0,
   baseLimit: 150,
-  baseTotal: 0,
   baseAll: [],
 
-  // tabs visibility helpers
+  // tab visibility
   hasBaseParallels: true,
 
   // typeahead
   taTimer: null,
-  taOpen: false,
   taItems: [],
+  taCache: new Map(),           // key: sport|q -> items
+  taAbort: null,               // AbortController for in-flight fetch
+  taWarmStarted: false,
 };
 
 const TAB_ORDER = ["Base", "Base Parallels", "Inserts", "Autographs", "Relics", "Variations"];
@@ -60,12 +44,6 @@ const TAB_TO_SECTIONS = {
 
 const $ = (id) => document.getElementById(id);
 
-function normalizeApiBase(url) {
-  const s = String(url || "").trim();
-  if (!s) return "";
-  return s.endsWith("/exec") ? s : s.replace(/\/+$/, "");
-}
-
 function qs(params) {
   const sp = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => {
@@ -77,9 +55,9 @@ function qs(params) {
   return sp.toString();
 }
 
-async function fetchJson(route, params) {
+async function fetchJson(route, params, opts = {}) {
   const url = `${state.apiBase}?${qs({ route, ...params })}`;
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetch(url, { cache: "no-store", signal: opts.signal });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
@@ -104,19 +82,14 @@ function tagsToBadges(tagsCell) {
    NATURAL SORTING
 ---------------------------- */
 
-function normalizeCardNo(s) {
-  return String(s || "").trim();
-}
-
 function naturalCompare(a, b) {
   const ax = String(a || "").toUpperCase().match(/(\d+|\D+)/g) || [];
   const bx = String(b || "").toUpperCase().match(/(\d+|\D+)/g) || [];
-
   const n = Math.max(ax.length, bx.length);
+
   for (let i = 0; i < n; i++) {
     const x = ax[i] ?? "";
     const y = bx[i] ?? "";
-
     const xNum = /^\d+$/.test(x);
     const yNum = /^\d+$/.test(y);
 
@@ -133,8 +106,8 @@ function naturalCompare(a, b) {
 }
 
 function compareCardsByCardNo(a, b) {
-  const ac = normalizeCardNo(a?.card_no);
-  const bc = normalizeCardNo(b?.card_no);
+  const ac = String(a?.card_no || "").trim();
+  const bc = String(b?.card_no || "").trim();
 
   if (!ac && !bc) return 0;
   if (!ac) return 1;
@@ -179,28 +152,19 @@ function saveLocal() {
 }
 
 function loadLocal() {
-  state.apiBase = normalizeApiBase(DEFAULT_API_BASE);
   state.sport = localStorage.getItem("cm_sport") || "baseball";
-  const sportEl = $("sport");
-  if (sportEl) sportEl.value = state.sport;
-}
-
-function showSetUI() {
-  $("setView").style.display = "block";
-  $("searchResults").style.display = "none";
-  $("moreSearch").style.display = "none";
-  $("countPill").style.display = "none";
+  $("sport").value = state.sport;
 }
 
 /* ---------------------------
-   TYPEAHEAD (set suggestions)
+   Typeahead
 ---------------------------- */
 
 function closeTypeahead() {
   const box = $("typeahead");
   if (!box) return;
   box.style.display = "none";
-  state.taOpen = false;
+  box.innerHTML = "";
   state.taItems = [];
 }
 
@@ -208,12 +172,8 @@ function openTypeahead(items) {
   const box = $("typeahead");
   if (!box) return;
 
-  if (!items || !items.length) {
-    closeTypeahead();
-    return;
-  }
+  if (!items || !items.length) return closeTypeahead();
 
-  state.taOpen = true;
   state.taItems = items;
 
   const html = items.slice(0, 8).map((p, idx) => {
@@ -235,13 +195,13 @@ function openTypeahead(items) {
 
   box.querySelectorAll(".typeaheadItem").forEach(el => {
     el.addEventListener("mousedown", async (e) => {
-      // mousedown so it fires before input blur
       const idx = parseInt(el.getAttribute("data-idx") || "0", 10);
       const item = state.taItems[idx];
       closeTypeahead();
       if (item?.code) {
-        $("search").value = item.release_name || item.product || item.code;
         await openSetByCode(item.code);
+        // clear bar after opening set
+        $("search").value = "";
       }
       e.preventDefault();
     });
@@ -249,19 +209,25 @@ function openTypeahead(items) {
 }
 
 async function fetchProductSuggestions(q) {
-  const j = await fetchJson("products", { sport: state.sport, q });
-  if (!j.ok) return [];
-  return (j.items || []).slice(0, 8);
+  const key = `${state.sport}|${q.toLowerCase()}`;
+  if (state.taCache.has(key)) return state.taCache.get(key);
+
+  // cancel any in-flight request
+  try { state.taAbort?.abort(); } catch {}
+  state.taAbort = new AbortController();
+
+  const j = await fetchJson("products", { sport: state.sport, q }, { signal: state.taAbort.signal });
+  const items = j?.ok ? (j.items || []) : [];
+  state.taCache.set(key, items);
+  return items;
 }
 
-function debounceTypeahead() {
+function scheduleTypeahead() {
   clearTimeout(state.taTimer);
   state.taTimer = setTimeout(async () => {
     const q = ($("search").value || "").trim();
-    if (q.length < 3) return closeTypeahead();
-
-    // If it looks like a code, don’t show suggestions
-    if (q.includes("_")) return closeTypeahead();
+    if (q.length < 2) return closeTypeahead();
+    if (q.includes("_")) return closeTypeahead(); // code typed
 
     try {
       const items = await fetchProductSuggestions(q);
@@ -269,37 +235,93 @@ function debounceTypeahead() {
     } catch {
       closeTypeahead();
     }
-  }, 160);
+  }, 90); // faster + feels snappier
+}
+
+/* Optional warm-up so first typeahead isn’t “cold” */
+async function warmTypeaheadOnce() {
+  if (state.taWarmStarted) return;
+  state.taWarmStarted = true;
+  try {
+    // harmless warm query; should be fast
+    await fetchProductSuggestions("topps");
+  } catch {}
 }
 
 /* ---------------------------
-   SEARCH: player results list
+   Search results UX (player/subset search)
+   Key change: show set/subset/section for each hit and GROUP results.
 ---------------------------- */
-
-function renderSearchRows(rows, append) {
-  const box = $("searchResults");
-  if (!append) box.innerHTML = "";
-
-  const html = rows.map(r => {
-    const cardNo = escapeHtml(r.card_no || "");
-    const player = escapeHtml(r.player || "");
-    const team = escapeHtml(r.team || "");
-    const badges = tagsToBadges(r.tags);
-    return `
-      <div class="r">
-        <div class="rTop">${cardNo} ${player} — ${team}${badges}</div>
-      </div>
-    `;
-  }).join("");
-
-  if (append) box.insertAdjacentHTML("beforeend", html);
-  else box.innerHTML = html;
-}
 
 function setSearchPills() {
   $("countPill").style.display = "inline-flex";
   $("countPill").textContent = `${state.searchShown} results`;
   $("moreSearch").style.display = state.searchHasMore ? "inline-flex" : "none";
+}
+
+function groupSearchItems(items) {
+  // Group by code -> subset -> items
+  const byCode = new Map();
+
+  items.forEach(it => {
+    const code = String(it.code || "").trim() || "[Unknown set]";
+    const subset = String(it.subset || "").trim() || "[Unspecified]";
+    if (!byCode.has(code)) byCode.set(code, new Map());
+    const bySubset = byCode.get(code);
+    if (!bySubset.has(subset)) bySubset.set(subset, []);
+    bySubset.get(subset).push(it);
+  });
+
+  const codes = Array.from(byCode.keys()).sort((a,b) => a.localeCompare(b));
+  const out = [];
+
+  for (const code of codes) {
+    const bySubset = byCode.get(code);
+    const subsets = Array.from(bySubset.keys()).sort((a,b) => a.localeCompare(b));
+    for (const subset of subsets) {
+      const arr = bySubset.get(subset) || [];
+      arr.sort(compareCardsByCardNo);
+      out.push({ code, subset, items: arr });
+    }
+  }
+
+  return out;
+}
+
+function renderSearchGrouped(items, append) {
+  const box = $("searchResults");
+  if (!append) box.innerHTML = "";
+
+  const groups = groupSearchItems(items);
+
+  const html = groups.map(g => {
+    const headerTitle = escapeHtml(g.subset === "[Unspecified]" ? g.code : `${g.code} • ${g.subset}`);
+    const metaBits = [];
+    // best-effort section label if consistent
+    const sec = String(g.items?.[0]?.section || "").trim();
+    if (sec) metaBits.push(sec);
+    metaBits.push(`${g.items.length} cards`);
+    const headerSub = escapeHtml(metaBits.join(" • "));
+
+    const rows = g.items.map(r => {
+      const cardNo = escapeHtml(r.card_no || "");
+      const player = escapeHtml(r.player || "");
+      const team = escapeHtml(r.team || "");
+      const tags = tagsToBadges(r.tags);
+      return `<div class="r"><div class="rTop">${cardNo} ${player} — ${team}${tags}</div></div>`;
+    }).join("");
+
+    return `
+      <div class="r">
+        <div class="rTop" style="font-weight:900;">${headerTitle}</div>
+        <div class="rSub">${headerSub}</div>
+      </div>
+      ${rows}
+    `;
+  }).join("");
+
+  if (append) box.insertAdjacentHTML("beforeend", html);
+  else box.innerHTML = html;
 }
 
 async function searchCardsPage(append) {
@@ -312,20 +334,21 @@ async function searchCardsPage(append) {
 
   if (!j.ok) {
     $("searchResults").style.display = "block";
-    $("searchResults").innerHTML = `<div class="r"><div class="rTop">Search failed</div><div class="rSub">${escapeHtml(j.error || "Unknown error")}</div></div>`;
+    $("searchResults").innerHTML =
+      `<div class="r"><div class="rTop">Search failed</div><div class="rSub">${escapeHtml(j.error || "Unknown error")}</div></div>`;
     state.searchHasMore = false;
     $("moreSearch").style.display = "none";
     return;
   }
 
   const items = (j.items || []).slice();
-  items.sort(compareCardsByCardNo);
 
   if (!append) state.searchShown = 0;
 
   if (!items.length && !append) {
     $("searchResults").style.display = "block";
-    $("searchResults").innerHTML = `<div class="r"><div class="rTop">No results</div><div class="rSub">Try a player name (Judge) or a set (Topps Series 1).</div></div>`;
+    $("searchResults").innerHTML =
+      `<div class="r"><div class="rTop">No results</div><div class="rSub">Try a player name (Judge) or a set (Topps Series 1).</div></div>`;
     state.searchHasMore = false;
     $("countPill").style.display = "none";
     $("moreSearch").style.display = "none";
@@ -333,7 +356,7 @@ async function searchCardsPage(append) {
   }
 
   $("searchResults").style.display = "block";
-  renderSearchRows(items, append);
+  renderSearchGrouped(items, append);
 
   state.searchShown += items.length;
   state.searchHasMore = !!j.has_more;
@@ -346,13 +369,8 @@ async function doMoreSearch() {
 }
 
 /* ---------------------------
-   SET VIEW + TAB VISIBILITY
+   Set view + tabs (hide empty)
 ---------------------------- */
-
-function getTabSections(tabName) {
-  if (tabName === "Base Parallels") return ["Base"];
-  return TAB_TO_SECTIONS[tabName] || [tabName];
-}
 
 function secCountFromSummary(sectionName) {
   const sec = (state.setSummary?.sections || []).find(x => x.section === sectionName);
@@ -365,22 +383,17 @@ function countForTab(tabName) {
   if (tabName === "Relics") return secCountFromSummary("Relic");
   if (tabName === "Variations") return secCountFromSummary("Variation");
   if (tabName === "Autographs") return secCountFromSummary("Autograph") + secCountFromSummary("Auto Relic");
-  if (tabName === "Base Parallels") return state.hasBaseParallels ? 1 : 0; // boolean-ish
+  if (tabName === "Base Parallels") return state.hasBaseParallels ? 1 : 0;
   return 1;
 }
 
 function isTabVisible(tabName) {
-  // Always show Base
   if (tabName === "Base") return true;
+  if (tabName === "Base Parallels") return countForTab(tabName) > 0;
 
-  // Hide tabs that have no cards
   if (tabName === "Inserts" || tabName === "Autographs" || tabName === "Relics" || tabName === "Variations") {
     return countForTab(tabName) > 0;
   }
-
-  // Hide Base Parallels if none
-  if (tabName === "Base Parallels") return countForTab(tabName) > 0;
-
   return true;
 }
 
@@ -398,14 +411,12 @@ function setSetHeader(countOverride) {
     return;
   }
 
-  const n = countForTab(state.activeTab);
-  // For Base Parallels we don’t have a “cards” count; show label instead
   if (state.activeTab === "Base Parallels") {
     $("setMeta").textContent = state.hasBaseParallels ? "Parallels" : "No parallels";
     return;
   }
 
-  $("setMeta").textContent = `${n} Cards`;
+  $("setMeta").textContent = `${countForTab(state.activeTab)} Cards`;
 }
 
 function renderSetTabs() {
@@ -413,8 +424,6 @@ function renderSetTabs() {
   el.innerHTML = "";
 
   const visibleTabs = TAB_ORDER.filter(isTabVisible);
-
-  // If current active tab is now hidden, snap back to Base
   if (!visibleTabs.includes(state.activeTab)) state.activeTab = "Base";
 
   visibleTabs.forEach(t => {
@@ -437,7 +446,7 @@ function formatParallelLine(p) {
   return sn ? `${name} ${sn}` : name;
 }
 
-async function fetchParallelsFor(section, subset /* optional */) {
+async function fetchParallelsFor(section, subset) {
   const j = await fetchJson("parallels", {
     sport: state.sport,
     code: state.setCode,
@@ -476,6 +485,11 @@ async function fetchAllCardsForSection(sectionValue) {
   return all;
 }
 
+function getTabSections(tabName) {
+  if (tabName === "Base Parallels") return ["Base"];
+  return TAB_TO_SECTIONS[tabName] || [tabName];
+}
+
 function groupBySubset(items) {
   const map = new Map();
   items.forEach(it => {
@@ -484,13 +498,7 @@ function groupBySubset(items) {
     map.get(subset).push(it);
   });
 
-  const keys = Array.from(map.keys());
-  keys.sort((a, b) => {
-    if (a === "[Base]") return -1;
-    if (b === "[Base]") return 1;
-    return a.localeCompare(b);
-  });
-
+  const keys = Array.from(map.keys()).sort((a,b) => a.localeCompare(b));
   return keys.map(k => {
     const arr = map.get(k) || [];
     arr.sort(compareCardsByCardNo);
@@ -501,7 +509,6 @@ function groupBySubset(items) {
 function renderSubsetBlock(subsetName, cards, parallels, opts = {}) {
   const count = cards.length;
   const isAutoTab = !!opts.isAutoTab;
-
   const subsetTitleSize = isAutoTab ? 18 : 16;
 
   const parallelsHtml = parallels.length
@@ -515,11 +522,9 @@ function renderSubsetBlock(subsetName, cards, parallels, opts = {}) {
     const player = String(c.player || "").trim();
     const team = String(c.team || "").trim();
     const tags = tagsToBadges(c.tags);
-
     const left = cardNo ? `${escapeHtml(cardNo)} ` : "";
     const mid = player ? escapeHtml(player) : "";
     const right = team ? ` — ${escapeHtml(team)}` : "";
-
     return `<div class="r"><div class="rTop">${left}${mid}${right}${tags}</div></div>`;
   }).join("");
 
@@ -529,9 +534,7 @@ function renderSubsetBlock(subsetName, cards, parallels, opts = {}) {
       <div class="subsetMeta">${count} Cards</div>
 
       <div style="height:10px;"></div>
-
       ${parallelsHtml}
-
       <div style="height:12px;"></div>
 
       <div class="resultsBox">
@@ -541,10 +544,7 @@ function renderSubsetBlock(subsetName, cards, parallels, opts = {}) {
   `;
 }
 
-/* ---------------------------
-   BASE: fetch all -> sort -> client paginate
----------------------------- */
-
+/* Base: fetch all -> sort -> client paginate */
 function renderBaseChunk(body) {
   const start = state.baseOffset;
   const end = Math.min(start + state.baseLimit, state.baseAll.length);
@@ -573,12 +573,7 @@ function renderBaseChunk(body) {
   const btn = document.getElementById("moreBase");
   if (btn) {
     if (shown >= total) btn.remove();
-    else {
-      btn.onclick = () => {
-        state.baseOffset += state.baseLimit;
-        renderBaseChunk(body);
-      };
-    }
+    else btn.onclick = () => { state.baseOffset += state.baseLimit; renderBaseChunk(body); };
   }
 }
 
@@ -591,10 +586,9 @@ async function renderBaseChecklist() {
 
   const all = await fetchAllCardsForSection("Base");
   all.sort(compareCardsByCardNo);
-
   state.baseAll = all;
-  state.baseTotal = all.length;
-  setSetHeader(state.baseTotal);
+
+  setSetHeader(state.baseAll.length);
 
   const parallels = await fetchParallelsFor("Base", "[Base]");
   const parallelsHtml = parallels.length
@@ -641,7 +635,7 @@ async function renderRolledUpSection(tabName) {
   setSetHeader(allCards.length);
 
   if (!allCards.length) {
-    body.innerHTML = `<div class="r"><div class="rTop">No cards found in ${escapeHtml(tabName)}.</div></div>`;
+    body.innerHTML = `<div class="r"><div class="rTop">No cards found.</div></div>`;
     return;
   }
 
@@ -672,10 +666,8 @@ async function renderRolledUpSection(tabName) {
 
 async function renderActiveTab() {
   if (!state.setCode) return;
-
   if (state.activeTab === "Base") return renderBaseChecklist();
   if (state.activeTab === "Base Parallels") return renderBaseParallelsOnly();
-
   return renderRolledUpSection(state.activeTab);
 }
 
@@ -688,16 +680,17 @@ async function openSetByCode(code) {
 
   state.setCode = code;
   state.activeTab = "Base";
-
   state.baseAll = [];
   state.baseOffset = 0;
-  state.baseTotal = 0;
 
-  $("setCode").textContent = code;
+  $("setView").style.display = "block";
+  $("searchResults").style.display = "none";
+  $("moreSearch").style.display = "none";
+  $("countPill").style.display = "none";
 
-  showSetUI();
   $("setTitle").textContent = "Loading…";
   $("setMeta").textContent = "Loading…";
+  $("setCode").textContent = code;
   $("setBody").innerHTML = "";
 
   const j = await fetchJson("summary", { sport: state.sport, code: state.setCode });
@@ -708,12 +701,12 @@ async function openSetByCode(code) {
 
   state.setSummary = j;
 
-  // Determine if Base Parallels exist (hide tab if none)
+  // hide Base Parallels tab if none
   try {
     const bp = await fetchParallelsFor("Base", "[Base]");
     state.hasBaseParallels = (bp && bp.length > 0);
   } catch {
-    state.hasBaseParallels = true; // don’t hide if unsure
+    state.hasBaseParallels = true;
   }
 
   renderSetTabs();
@@ -721,7 +714,7 @@ async function openSetByCode(code) {
 }
 
 /* ---------------------------
-   Product detection (Search button)
+   Product detection
 ---------------------------- */
 
 function looksLikeCode(q) {
@@ -736,7 +729,6 @@ async function tryOpenSetFromProducts(q) {
   const items = j.items || [];
   if (!items.length) return false;
 
-  // Pick best match: prefer exact release_name match (case-insensitive), otherwise first
   const qNorm = String(q).trim().toLowerCase();
   const exact = items.find(x => String(x.release_name || x.product || "").trim().toLowerCase() === qNorm);
   const best = exact || items[0];
@@ -749,7 +741,7 @@ async function tryOpenSetFromProducts(q) {
 }
 
 /* ---------------------------
-   SEARCH orchestrator
+   Search orchestrator
 ---------------------------- */
 
 async function doSearch() {
@@ -759,32 +751,38 @@ async function doSearch() {
   saveLocal();
 
   state.q = ($("search").value || "").trim();
-  if (!state.apiBase || !state.q) return;
+  if (!state.q) return;
 
   await checkHealth();
 
-  // reset player-search paging UI
+  // reset paging UI for player search
   state.searchOffset = 0;
   state.searchShown = 0;
   state.searchHasMore = false;
   $("moreSearch").style.display = "none";
   $("countPill").style.display = "none";
 
-  // Try set lookup first
+  // Set search first
   const opened = await tryOpenSetFromProducts(state.q);
-
   if (!opened && looksLikeCode(state.q)) {
     await openSetByCode(state.q);
+    $("search").value = ""; // clear after search
+    return;
+  }
+  if (opened) {
+    $("search").value = ""; // clear after search
     return;
   }
 
-  if (opened) return;
-
-  // Player search fallback
+  // Player/subset search fallback
   $("setView").style.display = "none";
   $("searchResults").style.display = "block";
   $("searchResults").innerHTML = `<div class="r"><div class="rTop">Searching…</div><div class="rSub">${escapeHtml(state.q)}</div></div>`;
+
   await searchCardsPage(false);
+
+  // clear after search to encourage next search
+  $("search").value = "";
 }
 
 /* ---------------------------
@@ -800,7 +798,8 @@ function wire() {
     closeTypeahead();
   });
 
-  $("search").addEventListener("input", debounceTypeahead);
+  $("search").addEventListener("focus", warmTypeaheadOnce);
+  $("search").addEventListener("input", scheduleTypeahead);
 
   $("search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doSearch();
@@ -808,7 +807,6 @@ function wire() {
   });
 
   $("search").addEventListener("blur", () => {
-    // slight delay so click can register
     setTimeout(() => closeTypeahead(), 120);
   });
 
@@ -829,7 +827,6 @@ async function registerSW() {
 }
 
 (async function init() {
-  state.apiBase = normalizeApiBase(DEFAULT_API_BASE);
   loadLocal();
   wire();
   await checkHealth();
