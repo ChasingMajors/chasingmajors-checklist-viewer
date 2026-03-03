@@ -4,15 +4,15 @@ const DEFAULT_API_BASE = "https://script.google.com/macros/s/AKfycbz25GxN79WE7PF
  * Sheet section values:
  *  Base, Insert, Autograph, Auto Relic, Relic, Variation
  *
- * UI tabs rollups:
- *  Inserts tab = Insert
- *  Autographs tab = Autograph + Auto Relic
- *  Relics tab = Relic
- *  Variations tab = Variation
+ * UI rollups:
+ *  Inserts = Insert
+ *  Autographs = Autograph + Auto Relic
+ *  Relics = Relic
+ *  Variations = Variation
  *
- * IMPORTANT:
- *  Base checklist should NOT filter by subset="[Base]" because many sheets leave subset blank
- *  for base cards. Filtering causes missing card numbers (3–9, etc.).
+ * IMPORTANT FIX:
+ *  Base checklist fetches ALL Base cards (all pages), sorts client-side naturally,
+ *  then paginates client-side. This prevents "1,2,10,11..100.." page-order bugs.
  */
 
 const state = {
@@ -31,15 +31,15 @@ const state = {
   setSummary: null,
   activeTab: "Base",
 
-  // base paging
+  // base paging (client-side)
   baseOffset: 0,
   baseLimit: 150,
   baseTotal: 0,
+  baseAll: [], // full base list cached client-side
 };
 
 const TAB_ORDER = ["Base", "Base Parallels", "Inserts", "Autographs", "Relics", "Variations"];
 
-// Map UI tab -> one or more sheet section values
 const TAB_TO_SECTIONS = {
   "Base": ["Base"],
   "Inserts": ["Insert"],
@@ -91,14 +91,13 @@ function tagsToBadges(tagsCell) {
 }
 
 /* ---------------------------
-   NATURAL SORTING (fixes 1,10,100)
+   NATURAL SORTING
 ---------------------------- */
 
 function normalizeCardNo(s) {
   return String(s || "").trim();
 }
 
-// Natural compare: "1" < "2" < "10", and "T91-2" < "T91-10"
 function naturalCompare(a, b) {
   const ax = String(a || "").toUpperCase().match(/(\d+|\D+)/g) || [];
   const bx = String(b || "").toUpperCase().match(/(\d+|\D+)/g) || [];
@@ -115,7 +114,7 @@ function naturalCompare(a, b) {
       const xi = parseInt(x, 10);
       const yi = parseInt(y, 10);
       if (xi !== yi) return xi - yi;
-      if (x.length !== y.length) return x.length - y.length; // fewer leading zeros first
+      if (x.length !== y.length) return x.length - y.length;
     } else {
       if (x !== y) return x < y ? -1 : 1;
     }
@@ -326,6 +325,11 @@ async function fetchParallelsFor(section, subset /* optional */) {
   return j.items || [];
 }
 
+/**
+ * IMPORTANT:
+ * This fetches ALL pages for a section. Even if backend sorts/paginates weirdly,
+ * we still collect all items, then sort on the client.
+ */
 async function fetchAllCardsForSection(sectionValue) {
   const all = [];
   let offset = 0;
@@ -376,18 +380,10 @@ function groupBySubset(items) {
   });
 }
 
-/**
- * UX changes:
- * - Subset title larger (+2px overall)
- * - Autographs subset title even larger (+2px more)
- * - Blank space between count and "Parallels:", and between parallels and checklist rows
- * - Checklist rows NOT bulleted
- */
 function renderSubsetBlock(subsetName, cards, parallels, opts = {}) {
   const count = cards.length;
   const isAutoTab = !!opts.isAutoTab;
 
-  // Relics/Inserts/Variations: 16px (was 14-ish); Autographs: 18px
   const subsetTitleSize = isAutoTab ? 18 : 16;
 
   const parallelsHtml = parallels.length
@@ -427,41 +423,16 @@ function renderSubsetBlock(subsetName, cards, parallels, opts = {}) {
   `;
 }
 
-async function renderBaseChecklist() {
-  const body = $("setBody");
-  body.innerHTML = `<div class="r"><div class="rTop">Loading Base checklist…</div><div class="rSub">Pulling cards…</div></div>`;
+/* ---------------------------
+   BASE (FIXED): fetch all -> sort -> client paginate
+---------------------------- */
 
-  state.baseOffset = 0;
+function renderBaseChunk(body) {
+  const start = state.baseOffset;
+  const end = Math.min(start + state.baseLimit, state.baseAll.length);
+  const slice = state.baseAll.slice(start, end);
 
-  // IMPORTANT: removed subset filter for Base
-  const j = await fetchJson("cards", {
-    sport: state.sport,
-    code: state.setCode,
-    section: "Base",
-    limit: state.baseLimit,
-    offset: state.baseOffset
-  });
-
-  if (!j.ok) {
-    body.innerHTML = `<div class="r"><div class="rTop">Failed to load Base</div><div class="rSub">${escapeHtml(j.error || "")}</div></div>`;
-    return;
-  }
-
-  state.baseTotal = j.total || 0;
-  setSetHeader(state.baseTotal);
-
-  const items = (j.items || []).slice();
-  items.sort(compareCardsByCardNo);
-
-  // Parallels: keep targeting Base + [Base] if your parallels use that marker.
-  // If you find parallels missing, switch this to: await fetchParallelsFor("Base", "")
-  const parallels = await fetchParallelsFor("Base", "[Base]");
-
-  const parallelsHtml = parallels.length
-    ? `<div class="parTitle">Parallels:</div><ul class="par">${parallels.map(p => `<li>${escapeHtml(formatParallelLine(p))}</li>`).join("")}</ul>`
-    : `<div class="parTitle">Parallels:</div><ul class="par"><li>None listed.</li></ul>`;
-
-  const listHtml = items.map(it => {
+  const listHtml = slice.map(it => {
     const cardNo = escapeHtml(it.card_no || "");
     const player = escapeHtml(it.player || "");
     const team = escapeHtml(it.team || "");
@@ -469,52 +440,79 @@ async function renderBaseChecklist() {
     return `<div class="r"><div class="rTop">${cardNo} ${player} — ${team}${tags}</div></div>`;
   }).join("");
 
-  const moreBtn = (state.baseOffset + state.baseLimit < state.baseTotal)
-    ? `<div class="btnRow"><button id="moreBase" class="btnGhost">Show more Base cards</button><div class="pill">${Math.min(items.length, state.baseTotal)} / ${state.baseTotal}</div></div>`
-    : `<div class="btnRow"><div class="pill">${Math.min(items.length, state.baseTotal)} / ${state.baseTotal}</div></div>`;
+  const shown = end;
+  const total = state.baseAll.length;
+
+  const moreBtn = (shown < total)
+    ? `<div class="btnRow"><button id="moreBase" class="btnGhost">Show more Base cards</button><div class="pill">${shown} / ${total}</div></div>`
+    : `<div class="btnRow"><div class="pill">${shown} / ${total}</div></div>`;
+
+  // append or replace list area
+  const box = body.querySelector(".resultsBox");
+  if (box) {
+    // if we're on first chunk, replace; otherwise append
+    if (start === 0) box.innerHTML = listHtml || `<div class="r"><div class="rTop">No cards found.</div></div>`;
+    else box.insertAdjacentHTML("beforeend", listHtml);
+  }
+
+  const pill = body.querySelector(".btnRow .pill");
+  if (pill) pill.textContent = `${shown} / ${total}`;
+
+  const more = document.getElementById("moreBase");
+  if (more) {
+    more.onclick = () => {
+      state.baseOffset += state.baseLimit;
+      renderBaseChunk(body);
+      if (state.baseOffset + state.baseLimit >= total) {
+        // next click would finish; remove button after render if done
+        const end2 = Math.min(state.baseOffset + state.baseLimit, total);
+        if (end2 >= total) {
+          const btn = document.getElementById("moreBase");
+          if (btn) btn.remove();
+        }
+      }
+    };
+  }
+}
+
+async function renderBaseChecklist() {
+  const body = $("setBody");
+  body.innerHTML = `<div class="r"><div class="rTop">Loading Base checklist…</div><div class="rSub">Pulling cards…</div></div>`;
+
+  state.baseOffset = 0;
+  state.baseAll = [];
+
+  // fetch ALL base cards (all pages), then sort naturally
+  const all = await fetchAllCardsForSection("Base");
+  all.sort(compareCardsByCardNo);
+
+  state.baseAll = all;
+  state.baseTotal = all.length;
+  setSetHeader(state.baseTotal);
+
+  // parallels (keep as-is; if your parallels don’t use [Base], change to subset:"")
+  const parallels = await fetchParallelsFor("Base", "[Base]");
+  const parallelsHtml = parallels.length
+    ? `<div class="parTitle">Parallels:</div><ul class="par">${parallels.map(p => `<li>${escapeHtml(formatParallelLine(p))}</li>`).join("")}</ul>`
+    : `<div class="parTitle">Parallels:</div><ul class="par"><li>None listed.</li></ul>`;
 
   body.innerHTML = `
     ${parallelsHtml}
     <div style="height:10px;"></div>
-    <div class="resultsBox">${listHtml || `<div class="r"><div class="rTop">No cards found.</div></div>`}</div>
-    ${moreBtn}
+    <div class="resultsBox"></div>
+    <div class="btnRow"><button id="moreBase" class="btnGhost" style="display:none;">Show more Base cards</button><div class="pill">${Math.min(state.baseLimit, state.baseAll.length)} / ${state.baseAll.length}</div></div>
   `;
 
+  // only show "more" if needed
   const more = document.getElementById("moreBase");
-  if (more) {
-    more.onclick = async () => {
-      state.baseOffset += state.baseLimit;
+  if (more) more.style.display = (state.baseAll.length > state.baseLimit) ? "inline-flex" : "none";
 
-      const j2 = await fetchJson("cards", {
-        sport: state.sport,
-        code: state.setCode,
-        section: "Base",
-        limit: state.baseLimit,
-        offset: state.baseOffset
-      });
+  renderBaseChunk(body);
 
-      if (!j2.ok) return;
-
-      const items2 = (j2.items || []).slice();
-      items2.sort(compareCardsByCardNo);
-
-      const addHtml = items2.map(it => {
-        const cardNo = escapeHtml(it.card_no || "");
-        const player = escapeHtml(it.player || "");
-        const team = escapeHtml(it.team || "");
-        const tags = tagsToBadges(it.tags);
-        return `<div class="r"><div class="rTop">${cardNo} ${player} — ${team}${tags}</div></div>`;
-      }).join("");
-
-      const box = body.querySelector(".resultsBox");
-      box.insertAdjacentHTML("beforeend", addHtml);
-
-      const shown = Math.min(state.baseOffset + state.baseLimit, state.baseTotal);
-      const pill = body.querySelector(".btnRow .pill");
-      if (pill) pill.textContent = `${shown} / ${state.baseTotal}`;
-
-      if (shown >= state.baseTotal) more.remove();
-    };
+  // if not needed, remove it
+  if (state.baseAll.length <= state.baseLimit) {
+    const btn = document.getElementById("moreBase");
+    if (btn) btn.remove();
   }
 }
 
@@ -564,20 +562,6 @@ async function renderRolledUpSection(tabName) {
     parBySubset.get(subset).push(p);
   });
 
-  for (const [k, arr] of parBySubset.entries()) {
-    arr.sort((a, b) => {
-      const an = String(a.parallel_name || "").toUpperCase();
-      const bn = String(b.parallel_name || "").toUpperCase();
-      if (an !== bn) return an < bn ? -1 : 1;
-
-      const asn = String(a.serial_no || "").toUpperCase();
-      const bsn = String(b.serial_no || "").toUpperCase();
-      if (asn !== bsn) return asn < bsn ? -1 : 1;
-      return 0;
-    });
-    parBySubset.set(k, arr);
-  }
-
   const isAutoTab = tabName === "Autographs";
 
   const html = grouped.map(g => {
@@ -600,6 +584,12 @@ async function renderActiveTab() {
 async function openSetByCode(code) {
   state.setCode = code;
   state.activeTab = "Base";
+
+  // reset base cache for new set
+  state.baseAll = [];
+  state.baseOffset = 0;
+  state.baseTotal = 0;
+
   $("setCode").textContent = code;
 
   showSetUI();
@@ -614,19 +604,30 @@ async function openSetByCode(code) {
   }
 
   state.setSummary = j;
-  state.baseTotal = secCountFromSummary("Base");
-
   renderSetTabs();
   await renderActiveTab();
 }
 
-function secCountFromSummary(sectionName) {
-  const sec = (state.setSummary?.sections || []).find(x => x.section === sectionName);
-  return sec ? (sec.count || 0) : 0;
+function renderSetTabs() {
+  const el = $("setTabs");
+  el.innerHTML = "";
+
+  TAB_ORDER.forEach(t => {
+    const b = document.createElement("button");
+    b.className = "tab" + (t === state.activeTab ? " active" : "");
+    b.textContent = t;
+    b.onclick = async () => {
+      state.activeTab = t;
+      renderSetTabs();
+      $("setBody").innerHTML = `<div class="r"><div class="rTop">Loading…</div></div>`;
+      await renderActiveTab();
+    };
+    el.appendChild(b);
+  });
 }
 
 /* ---------------------------
-   PRODUCT detection
+   PRODUCT detection + SEARCH
 ---------------------------- */
 
 function looksLikeCode(q) {
@@ -647,10 +648,6 @@ async function tryOpenSetFromProducts(q) {
   await openSetByCode(code);
   return true;
 }
-
-/* ---------------------------
-   SEARCH orchestrator
----------------------------- */
 
 async function doSearch() {
   state.sport = $("sport").value;
@@ -690,7 +687,6 @@ async function doSearch() {
 function wire() {
   $("go").onclick = doSearch;
   $("search").addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
-
   $("moreSearch").onclick = doMoreSearch;
 
   $("backToSearch").onclick = () => {
