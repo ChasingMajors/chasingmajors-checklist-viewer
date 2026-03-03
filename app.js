@@ -10,9 +10,11 @@ const DEFAULT_API_BASE = "https://script.google.com/macros/s/AKfycbz25GxN79WE7PF
  *  Relics = Relic
  *  Variations = Variation
  *
- * IMPORTANT FIX:
- *  Base checklist fetches ALL Base cards (all pages), sorts client-side naturally,
- *  then paginates client-side. This prevents "1,2,10,11..100.." page-order bugs.
+ * FIXES INCLUDED:
+ *  - Base: fetch ALL cards, client-sort naturally, client paginate (prevents 1,2,10,100 issues).
+ *  - Set suggestions (typeahead) from Products route.
+ *  - Hide tabs when counts are 0 (e.g., no Relics/Variations).
+ *  - Remove "Back to search" usage.
  */
 
 const state = {
@@ -35,7 +37,15 @@ const state = {
   baseOffset: 0,
   baseLimit: 150,
   baseTotal: 0,
-  baseAll: [], // full base list cached client-side
+  baseAll: [],
+
+  // tabs visibility helpers
+  hasBaseParallels: true,
+
+  // typeahead
+  taTimer: null,
+  taOpen: false,
+  taItems: [],
 };
 
 const TAB_ORDER = ["Base", "Base Parallels", "Inserts", "Autographs", "Relics", "Variations"];
@@ -175,18 +185,91 @@ function loadLocal() {
   if (sportEl) sportEl.value = state.sport;
 }
 
-function showSearchUI() {
-  $("setView").style.display = "none";
-  $("searchResults").style.display = "block";
-  $("backToSearch").style.display = "none";
-}
-
 function showSetUI() {
   $("setView").style.display = "block";
   $("searchResults").style.display = "none";
   $("moreSearch").style.display = "none";
   $("countPill").style.display = "none";
-  $("backToSearch").style.display = "inline-flex";
+}
+
+/* ---------------------------
+   TYPEAHEAD (set suggestions)
+---------------------------- */
+
+function closeTypeahead() {
+  const box = $("typeahead");
+  if (!box) return;
+  box.style.display = "none";
+  state.taOpen = false;
+  state.taItems = [];
+}
+
+function openTypeahead(items) {
+  const box = $("typeahead");
+  if (!box) return;
+
+  if (!items || !items.length) {
+    closeTypeahead();
+    return;
+  }
+
+  state.taOpen = true;
+  state.taItems = items;
+
+  const html = items.slice(0, 8).map((p, idx) => {
+    const release = escapeHtml(p.release_name || p.product || p.code || "Unknown set");
+    const year = escapeHtml(p.year || "");
+    const manu = escapeHtml(p.manufacturer || "");
+    const code = escapeHtml(p.code || "");
+    const sub = [year, manu, code].filter(Boolean).join(" • ");
+    return `
+      <div class="typeaheadItem" data-idx="${idx}">
+        <div class="typeaheadTitle">${release}</div>
+        <div class="typeaheadSub">${sub}</div>
+      </div>
+    `;
+  }).join("");
+
+  box.innerHTML = html;
+  box.style.display = "block";
+
+  box.querySelectorAll(".typeaheadItem").forEach(el => {
+    el.addEventListener("mousedown", async (e) => {
+      // mousedown so it fires before input blur
+      const idx = parseInt(el.getAttribute("data-idx") || "0", 10);
+      const item = state.taItems[idx];
+      closeTypeahead();
+      if (item?.code) {
+        $("search").value = item.release_name || item.product || item.code;
+        await openSetByCode(item.code);
+      }
+      e.preventDefault();
+    });
+  });
+}
+
+async function fetchProductSuggestions(q) {
+  const j = await fetchJson("products", { sport: state.sport, q });
+  if (!j.ok) return [];
+  return (j.items || []).slice(0, 8);
+}
+
+function debounceTypeahead() {
+  clearTimeout(state.taTimer);
+  state.taTimer = setTimeout(async () => {
+    const q = ($("search").value || "").trim();
+    if (q.length < 3) return closeTypeahead();
+
+    // If it looks like a code, don’t show suggestions
+    if (q.includes("_")) return closeTypeahead();
+
+    try {
+      const items = await fetchProductSuggestions(q);
+      openTypeahead(items);
+    } catch {
+      closeTypeahead();
+    }
+  }, 160);
 }
 
 /* ---------------------------
@@ -242,7 +325,7 @@ async function searchCardsPage(append) {
 
   if (!items.length && !append) {
     $("searchResults").style.display = "block";
-    $("searchResults").innerHTML = `<div class="r"><div class="rTop">No results</div><div class="rSub">Try a player name (Judge) or a product code (2026_topps_series1).</div></div>`;
+    $("searchResults").innerHTML = `<div class="r"><div class="rTop">No results</div><div class="rSub">Try a player name (Judge) or a set (Topps Series 1).</div></div>`;
     state.searchHasMore = false;
     $("countPill").style.display = "none";
     $("moreSearch").style.display = "none";
@@ -263,12 +346,42 @@ async function doMoreSearch() {
 }
 
 /* ---------------------------
-   SET VIEW
+   SET VIEW + TAB VISIBILITY
 ---------------------------- */
 
 function getTabSections(tabName) {
   if (tabName === "Base Parallels") return ["Base"];
   return TAB_TO_SECTIONS[tabName] || [tabName];
+}
+
+function secCountFromSummary(sectionName) {
+  const sec = (state.setSummary?.sections || []).find(x => x.section === sectionName);
+  return sec ? (sec.count || 0) : 0;
+}
+
+function countForTab(tabName) {
+  if (tabName === "Base") return secCountFromSummary("Base");
+  if (tabName === "Inserts") return secCountFromSummary("Insert");
+  if (tabName === "Relics") return secCountFromSummary("Relic");
+  if (tabName === "Variations") return secCountFromSummary("Variation");
+  if (tabName === "Autographs") return secCountFromSummary("Autograph") + secCountFromSummary("Auto Relic");
+  if (tabName === "Base Parallels") return state.hasBaseParallels ? 1 : 0; // boolean-ish
+  return 1;
+}
+
+function isTabVisible(tabName) {
+  // Always show Base
+  if (tabName === "Base") return true;
+
+  // Hide tabs that have no cards
+  if (tabName === "Inserts" || tabName === "Autographs" || tabName === "Relics" || tabName === "Variations") {
+    return countForTab(tabName) > 0;
+  }
+
+  // Hide Base Parallels if none
+  if (tabName === "Base Parallels") return countForTab(tabName) > 0;
+
+  return true;
 }
 
 function setSetHeader(countOverride) {
@@ -285,8 +398,13 @@ function setSetHeader(countOverride) {
     return;
   }
 
-  const sec = (state.setSummary?.sections || []).find(x => x.section === state.activeTab);
-  const n = sec?.count || 0;
+  const n = countForTab(state.activeTab);
+  // For Base Parallels we don’t have a “cards” count; show label instead
+  if (state.activeTab === "Base Parallels") {
+    $("setMeta").textContent = state.hasBaseParallels ? "Parallels" : "No parallels";
+    return;
+  }
+
   $("setMeta").textContent = `${n} Cards`;
 }
 
@@ -294,7 +412,12 @@ function renderSetTabs() {
   const el = $("setTabs");
   el.innerHTML = "";
 
-  TAB_ORDER.forEach(t => {
+  const visibleTabs = TAB_ORDER.filter(isTabVisible);
+
+  // If current active tab is now hidden, snap back to Base
+  if (!visibleTabs.includes(state.activeTab)) state.activeTab = "Base";
+
+  visibleTabs.forEach(t => {
     const b = document.createElement("button");
     b.className = "tab" + (t === state.activeTab ? " active" : "");
     b.textContent = t;
@@ -325,11 +448,6 @@ async function fetchParallelsFor(section, subset /* optional */) {
   return j.items || [];
 }
 
-/**
- * IMPORTANT:
- * This fetches ALL pages for a section. Even if backend sorts/paginates weirdly,
- * we still collect all items, then sort on the client.
- */
 async function fetchAllCardsForSection(sectionValue) {
   const all = [];
   let offset = 0;
@@ -424,7 +542,7 @@ function renderSubsetBlock(subsetName, cards, parallels, opts = {}) {
 }
 
 /* ---------------------------
-   BASE (FIXED): fetch all -> sort -> client paginate
+   BASE: fetch all -> sort -> client paginate
 ---------------------------- */
 
 function renderBaseChunk(body) {
@@ -443,14 +561,8 @@ function renderBaseChunk(body) {
   const shown = end;
   const total = state.baseAll.length;
 
-  const moreBtn = (shown < total)
-    ? `<div class="btnRow"><button id="moreBase" class="btnGhost">Show more Base cards</button><div class="pill">${shown} / ${total}</div></div>`
-    : `<div class="btnRow"><div class="pill">${shown} / ${total}</div></div>`;
-
-  // append or replace list area
   const box = body.querySelector(".resultsBox");
   if (box) {
-    // if we're on first chunk, replace; otherwise append
     if (start === 0) box.innerHTML = listHtml || `<div class="r"><div class="rTop">No cards found.</div></div>`;
     else box.insertAdjacentHTML("beforeend", listHtml);
   }
@@ -458,20 +570,15 @@ function renderBaseChunk(body) {
   const pill = body.querySelector(".btnRow .pill");
   if (pill) pill.textContent = `${shown} / ${total}`;
 
-  const more = document.getElementById("moreBase");
-  if (more) {
-    more.onclick = () => {
-      state.baseOffset += state.baseLimit;
-      renderBaseChunk(body);
-      if (state.baseOffset + state.baseLimit >= total) {
-        // next click would finish; remove button after render if done
-        const end2 = Math.min(state.baseOffset + state.baseLimit, total);
-        if (end2 >= total) {
-          const btn = document.getElementById("moreBase");
-          if (btn) btn.remove();
-        }
-      }
-    };
+  const btn = document.getElementById("moreBase");
+  if (btn) {
+    if (shown >= total) btn.remove();
+    else {
+      btn.onclick = () => {
+        state.baseOffset += state.baseLimit;
+        renderBaseChunk(body);
+      };
+    }
   }
 }
 
@@ -482,7 +589,6 @@ async function renderBaseChecklist() {
   state.baseOffset = 0;
   state.baseAll = [];
 
-  // fetch ALL base cards (all pages), then sort naturally
   const all = await fetchAllCardsForSection("Base");
   all.sort(compareCardsByCardNo);
 
@@ -490,7 +596,6 @@ async function renderBaseChecklist() {
   state.baseTotal = all.length;
   setSetHeader(state.baseTotal);
 
-  // parallels (keep as-is; if your parallels don’t use [Base], change to subset:"")
   const parallels = await fetchParallelsFor("Base", "[Base]");
   const parallelsHtml = parallels.length
     ? `<div class="parTitle">Parallels:</div><ul class="par">${parallels.map(p => `<li>${escapeHtml(formatParallelLine(p))}</li>`).join("")}</ul>`
@@ -500,20 +605,13 @@ async function renderBaseChecklist() {
     ${parallelsHtml}
     <div style="height:10px;"></div>
     <div class="resultsBox"></div>
-    <div class="btnRow"><button id="moreBase" class="btnGhost" style="display:none;">Show more Base cards</button><div class="pill">${Math.min(state.baseLimit, state.baseAll.length)} / ${state.baseAll.length}</div></div>
+    <div class="btnRow">
+      <button id="moreBase" class="btnGhost" style="display:${state.baseAll.length > state.baseLimit ? "inline-flex" : "none"};">Show more Base cards</button>
+      <div class="pill">${Math.min(state.baseLimit, state.baseAll.length)} / ${state.baseAll.length}</div>
+    </div>
   `;
 
-  // only show "more" if needed
-  const more = document.getElementById("moreBase");
-  if (more) more.style.display = (state.baseAll.length > state.baseLimit) ? "inline-flex" : "none";
-
   renderBaseChunk(body);
-
-  // if not needed, remove it
-  if (state.baseAll.length <= state.baseLimit) {
-    const btn = document.getElementById("moreBase");
-    if (btn) btn.remove();
-  }
 }
 
 async function renderBaseParallelsOnly() {
@@ -521,7 +619,7 @@ async function renderBaseParallelsOnly() {
   body.innerHTML = `<div class="r"><div class="rTop">Loading Base parallels…</div></div>`;
 
   const parallels = await fetchParallelsFor("Base", "[Base]");
-  setSetHeader(state.baseTotal || undefined);
+  setSetHeader();
 
   body.innerHTML = parallels.length
     ? `<div class="parTitle">Parallels:</div><ul class="par">${parallels.map(p => `<li>${escapeHtml(formatParallelLine(p))}</li>`).join("")}</ul>`
@@ -543,7 +641,7 @@ async function renderRolledUpSection(tabName) {
   setSetHeader(allCards.length);
 
   if (!allCards.length) {
-    body.innerHTML = `<div class="r"><div class="rTop">No cards found in ${escapeHtml(tabName)}.</div><div class="rSub">Expected section values: ${escapeHtml(sections.join(", "))}</div></div>`;
+    body.innerHTML = `<div class="r"><div class="rTop">No cards found in ${escapeHtml(tabName)}.</div></div>`;
     return;
   }
 
@@ -581,11 +679,16 @@ async function renderActiveTab() {
   return renderRolledUpSection(state.activeTab);
 }
 
+/* ---------------------------
+   Open set
+---------------------------- */
+
 async function openSetByCode(code) {
+  closeTypeahead();
+
   state.setCode = code;
   state.activeTab = "Base";
 
-  // reset base cache for new set
   state.baseAll = [];
   state.baseOffset = 0;
   state.baseTotal = 0;
@@ -604,30 +707,21 @@ async function openSetByCode(code) {
   }
 
   state.setSummary = j;
+
+  // Determine if Base Parallels exist (hide tab if none)
+  try {
+    const bp = await fetchParallelsFor("Base", "[Base]");
+    state.hasBaseParallels = (bp && bp.length > 0);
+  } catch {
+    state.hasBaseParallels = true; // don’t hide if unsure
+  }
+
   renderSetTabs();
   await renderActiveTab();
 }
 
-function renderSetTabs() {
-  const el = $("setTabs");
-  el.innerHTML = "";
-
-  TAB_ORDER.forEach(t => {
-    const b = document.createElement("button");
-    b.className = "tab" + (t === state.activeTab ? " active" : "");
-    b.textContent = t;
-    b.onclick = async () => {
-      state.activeTab = t;
-      renderSetTabs();
-      $("setBody").innerHTML = `<div class="r"><div class="rTop">Loading…</div></div>`;
-      await renderActiveTab();
-    };
-    el.appendChild(b);
-  });
-}
-
 /* ---------------------------
-   PRODUCT detection + SEARCH
+   Product detection (Search button)
 ---------------------------- */
 
 function looksLikeCode(q) {
@@ -642,31 +736,41 @@ async function tryOpenSetFromProducts(q) {
   const items = j.items || [];
   if (!items.length) return false;
 
-  const code = String(items[0].code || "").trim();
+  // Pick best match: prefer exact release_name match (case-insensitive), otherwise first
+  const qNorm = String(q).trim().toLowerCase();
+  const exact = items.find(x => String(x.release_name || x.product || "").trim().toLowerCase() === qNorm);
+  const best = exact || items[0];
+
+  const code = String(best.code || "").trim();
   if (!code) return false;
 
   await openSetByCode(code);
   return true;
 }
 
+/* ---------------------------
+   SEARCH orchestrator
+---------------------------- */
+
 async function doSearch() {
+  closeTypeahead();
+
   state.sport = $("sport").value;
   saveLocal();
 
-  state.q = $("search").value.trim();
+  state.q = ($("search").value || "").trim();
   if (!state.apiBase || !state.q) return;
 
   await checkHealth();
 
+  // reset player-search paging UI
   state.searchOffset = 0;
   state.searchShown = 0;
   state.searchHasMore = false;
   $("moreSearch").style.display = "none";
   $("countPill").style.display = "none";
 
-  $("searchResults").style.display = "block";
-  $("searchResults").innerHTML = `<div class="r"><div class="rTop">Searching…</div><div class="rSub">${escapeHtml(state.q)}</div></div>`;
-
+  // Try set lookup first
   const opened = await tryOpenSetFromProducts(state.q);
 
   if (!opened && looksLikeCode(state.q)) {
@@ -676,7 +780,10 @@ async function doSearch() {
 
   if (opened) return;
 
-  showSearchUI();
+  // Player search fallback
+  $("setView").style.display = "none";
+  $("searchResults").style.display = "block";
+  $("searchResults").innerHTML = `<div class="r"><div class="rTop">Searching…</div><div class="rSub">${escapeHtml(state.q)}</div></div>`;
   await searchCardsPage(false);
 }
 
@@ -686,14 +793,34 @@ async function doSearch() {
 
 function wire() {
   $("go").onclick = doSearch;
-  $("search").addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
+
+  $("sport").addEventListener("change", () => {
+    state.sport = $("sport").value;
+    saveLocal();
+    closeTypeahead();
+  });
+
+  $("search").addEventListener("input", debounceTypeahead);
+
+  $("search").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") doSearch();
+    if (e.key === "Escape") closeTypeahead();
+  });
+
+  $("search").addEventListener("blur", () => {
+    // slight delay so click can register
+    setTimeout(() => closeTypeahead(), 120);
+  });
+
   $("moreSearch").onclick = doMoreSearch;
 
-  $("backToSearch").onclick = () => {
-    $("setView").style.display = "none";
-    $("searchResults").style.display = "block";
-    $("backToSearch").style.display = "none";
-  };
+  document.addEventListener("click", (e) => {
+    const box = $("typeahead");
+    const inp = $("search");
+    if (!box || !inp) return;
+    if (e.target === inp || box.contains(e.target)) return;
+    closeTypeahead();
+  });
 }
 
 async function registerSW() {
