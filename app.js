@@ -27,9 +27,21 @@ const state = {
   // typeahead
   taTimer: null,
   taItems: [],
-  taCache: new Map(),           // key: sport|q -> items
-  taAbort: null,               // AbortController for in-flight fetch
+  taCache: new Map(),
+  taAbort: null,
   taWarmStarted: false,
+
+  // browse modal
+  browse: {
+    q: "",
+    offset: 0,
+    limit: 50,
+    hasMore: false,
+    shown: 0,
+    debounce: null,
+  },
+
+  theme: "dark",
 };
 
 const TAB_ORDER = ["Base", "Base Parallels", "Inserts", "Autographs", "Relics", "Variations"];
@@ -76,6 +88,42 @@ function tagsToBadges(tagsCell) {
   if (!t) return "";
   const tags = t.split("|").map(x => x.trim().toUpperCase()).filter(Boolean);
   return tags.map(x => `<span class="badge">${escapeHtml(x)}</span>`).join("");
+}
+
+/* ---------------------------
+   Theme toggle (mirrors Print Run Vault)
+---------------------------- */
+
+function setTheme(theme) {
+  state.theme = theme === "light" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", state.theme);
+  localStorage.setItem("cm_theme", state.theme);
+
+  // swap icon
+  const icon = $("themeIcon");
+  if (!icon) return;
+
+  if (state.theme === "dark") {
+    // moon
+    icon.innerHTML = `<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>`;
+  } else {
+    // sun
+    icon.innerHTML = `
+      <circle cx="12" cy="12" r="4"></circle>
+      <path d="M12 2v2"></path><path d="M12 20v2"></path>
+      <path d="M4.93 4.93l1.41 1.41"></path><path d="M17.66 17.66l1.41 1.41"></path>
+      <path d="M2 12h2"></path><path d="M20 12h2"></path>
+      <path d="M4.93 19.07l1.41-1.41"></path><path d="M17.66 6.34l1.41-1.41"></path>
+    `;
+  }
+}
+
+function loadTheme() {
+  const saved = localStorage.getItem("cm_theme");
+  if (saved === "light" || saved === "dark") return setTheme(saved);
+
+  // default dark
+  setTheme("dark");
 }
 
 /* ---------------------------
@@ -153,11 +201,12 @@ function saveLocal() {
 
 function loadLocal() {
   state.sport = localStorage.getItem("cm_sport") || "baseball";
-  $("sport").value = state.sport;
+  const sportEl = $("sport");
+  if (sportEl) sportEl.value = state.sport;
 }
 
 /* ---------------------------
-   Typeahead
+   Typeahead (snappy)
 ---------------------------- */
 
 function closeTypeahead() {
@@ -200,7 +249,6 @@ function openTypeahead(items) {
       closeTypeahead();
       if (item?.code) {
         await openSetByCode(item.code);
-        // clear bar after opening set
         $("search").value = "";
       }
       e.preventDefault();
@@ -212,7 +260,6 @@ async function fetchProductSuggestions(q) {
   const key = `${state.sport}|${q.toLowerCase()}`;
   if (state.taCache.has(key)) return state.taCache.get(key);
 
-  // cancel any in-flight request
   try { state.taAbort?.abort(); } catch {}
   state.taAbort = new AbortController();
 
@@ -227,7 +274,7 @@ function scheduleTypeahead() {
   state.taTimer = setTimeout(async () => {
     const q = ($("search").value || "").trim();
     if (q.length < 2) return closeTypeahead();
-    if (q.includes("_")) return closeTypeahead(); // code typed
+    if (q.includes("_")) return closeTypeahead();
 
     try {
       const items = await fetchProductSuggestions(q);
@@ -235,32 +282,28 @@ function scheduleTypeahead() {
     } catch {
       closeTypeahead();
     }
-  }, 90); // faster + feels snappier
+  }, 90);
 }
 
-/* Optional warm-up so first typeahead isn’t “cold” */
 async function warmTypeaheadOnce() {
   if (state.taWarmStarted) return;
   state.taWarmStarted = true;
-  try {
-    // harmless warm query; should be fast
-    await fetchProductSuggestions("topps");
-  } catch {}
+  try { await fetchProductSuggestions("topps"); } catch {}
 }
 
 /* ---------------------------
-   Search results UX (player/subset search)
-   Key change: show set/subset/section for each hit and GROUP results.
+   Search results UX (grouped)
 ---------------------------- */
 
 function setSearchPills() {
-  $("countPill").style.display = "inline-flex";
-  $("countPill").textContent = `${state.searchShown} results`;
+  const pill = $("countPill");
+  if (!pill) return;
+  pill.style.display = "inline-flex";
+  pill.textContent = `${state.searchShown} results`;
   $("moreSearch").style.display = state.searchHasMore ? "inline-flex" : "none";
 }
 
 function groupSearchItems(items) {
-  // Group by code -> subset -> items
   const byCode = new Map();
 
   items.forEach(it => {
@@ -296,12 +339,8 @@ function renderSearchGrouped(items, append) {
 
   const html = groups.map(g => {
     const headerTitle = escapeHtml(g.subset === "[Unspecified]" ? g.code : `${g.code} • ${g.subset}`);
-    const metaBits = [];
-    // best-effort section label if consistent
     const sec = String(g.items?.[0]?.section || "").trim();
-    if (sec) metaBits.push(sec);
-    metaBits.push(`${g.items.length} cards`);
-    const headerSub = escapeHtml(metaBits.join(" • "));
+    const meta = escapeHtml([sec, `${g.items.length} cards`].filter(Boolean).join(" • "));
 
     const rows = g.items.map(r => {
       const cardNo = escapeHtml(r.card_no || "");
@@ -313,8 +352,8 @@ function renderSearchGrouped(items, append) {
 
     return `
       <div class="r">
-        <div class="rTop" style="font-weight:900;">${headerTitle}</div>
-        <div class="rSub">${headerSub}</div>
+        <div class="rTop" style="font-weight:950;">${headerTitle}</div>
+        <div class="rSub">${meta}</div>
       </div>
       ${rows}
     `;
@@ -348,7 +387,7 @@ async function searchCardsPage(append) {
   if (!items.length && !append) {
     $("searchResults").style.display = "block";
     $("searchResults").innerHTML =
-      `<div class="r"><div class="rTop">No results</div><div class="rSub">Try a player name (Judge) or a set (Topps Series 1).</div></div>`;
+      `<div class="r"><div class="rTop">No results yet. Run a search.</div></div>`;
     state.searchHasMore = false;
     $("countPill").style.display = "none";
     $("moreSearch").style.display = "none";
@@ -390,7 +429,6 @@ function countForTab(tabName) {
 function isTabVisible(tabName) {
   if (tabName === "Base") return true;
   if (tabName === "Base Parallels") return countForTab(tabName) > 0;
-
   if (tabName === "Inserts" || tabName === "Autographs" || tabName === "Relics" || tabName === "Variations") {
     return countForTab(tabName) > 0;
   }
@@ -579,7 +617,7 @@ function renderBaseChunk(body) {
 
 async function renderBaseChecklist() {
   const body = $("setBody");
-  body.innerHTML = `<div class="r"><div class="rTop">Loading Base checklist…</div><div class="rSub">Pulling cards…</div></div>`;
+  body.innerHTML = `<div class="r"><div class="rTop">Loading Base checklist…</div></div>`;
 
   state.baseOffset = 0;
   state.baseAll = [];
@@ -600,7 +638,7 @@ async function renderBaseChecklist() {
     <div style="height:10px;"></div>
     <div class="resultsBox"></div>
     <div class="btnRow">
-      <button id="moreBase" class="btnGhost" style="display:${state.baseAll.length > state.baseLimit ? "inline-flex" : "none"};">Show more Base cards</button>
+      <button id="moreBase" class="btn btnGhost" style="display:${state.baseAll.length > state.baseLimit ? "inline-flex" : "none"}; width:auto; height:auto; padding:10px 14px;">Show more</button>
       <div class="pill">${Math.min(state.baseLimit, state.baseAll.length)} / ${state.baseAll.length}</div>
     </div>
   `;
@@ -622,7 +660,7 @@ async function renderBaseParallelsOnly() {
 
 async function renderRolledUpSection(tabName) {
   const body = $("setBody");
-  body.innerHTML = `<div class="r"><div class="rTop">Loading ${escapeHtml(tabName)}…</div><div class="rSub">Grouping by subset…</div></div>`;
+  body.innerHTML = `<div class="r"><div class="rTop">Loading ${escapeHtml(tabName)}…</div></div>`;
 
   const sections = getTabSections(tabName);
 
@@ -701,7 +739,6 @@ async function openSetByCode(code) {
 
   state.setSummary = j;
 
-  // hide Base Parallels tab if none
   try {
     const bp = await fetchParallelsFor("Base", "[Base]");
     state.hasBaseParallels = (bp && bp.length > 0);
@@ -741,6 +778,100 @@ async function tryOpenSetFromProducts(q) {
 }
 
 /* ---------------------------
+   Browse modal (loaded checklists)
+---------------------------- */
+
+function showBrowseModal() { $("browseModal").style.display = "block"; }
+function hideBrowseModal() { $("browseModal").style.display = "none"; }
+
+function renderBrowseItems(items, append) {
+  const box = $("browseList");
+  if (!append) box.innerHTML = "";
+
+  const html = items.map(p => {
+    const title = escapeHtml(p.release_name || p.product || p.code || "Unknown");
+    const sub = escapeHtml([p.year, p.manufacturer, p.code].filter(Boolean).join(" • "));
+    return `
+      <div class="r" style="cursor:pointer;" data-code="${escapeHtml(p.code)}">
+        <div class="rTop" style="font-weight:950;">${title}</div>
+        <div class="rSub">${sub}</div>
+      </div>
+    `;
+  }).join("");
+
+  if (append) box.insertAdjacentHTML("beforeend", html);
+  else box.innerHTML = html;
+
+  box.querySelectorAll(".r[data-code]").forEach(el => {
+    el.addEventListener("click", async () => {
+      const code = el.getAttribute("data-code");
+      if (!code) return;
+      hideBrowseModal();
+      await openSetByCode(code);
+      $("search").value = "";
+    });
+  });
+}
+
+async function loadBrowsePage(append) {
+  const q = (state.browse.q || "").trim();
+
+  const j = await fetchJson("products", {
+    sport: state.sport,
+    q,
+    limit: state.browse.limit,
+    offset: state.browse.offset
+  });
+
+  if (!j.ok) {
+    $("browseList").innerHTML = `<div class="r"><div class="rTop">Failed to load</div><div class="rSub">${escapeHtml(j.error || "")}</div></div>`;
+    $("browseMore").style.display = "none";
+    $("browsePill").style.display = "none";
+    return;
+  }
+
+  const items = j.items || [];
+  if (!append) state.browse.shown = 0;
+
+  renderBrowseItems(items, append);
+
+  state.browse.shown += items.length;
+  state.browse.hasMore = !!j.has_more;
+
+  $("browseMore").style.display = state.browse.hasMore ? "inline-flex" : "none";
+  $("browsePill").style.display = "inline-flex";
+  $("browsePill").textContent = `${state.browse.shown}${j.total ? " / " + j.total : ""}`;
+}
+
+async function openBrowse() {
+  state.browse.q = "";
+  state.browse.offset = 0;
+  state.browse.shown = 0;
+
+  $("browseFilter").value = "";
+  $("browseList").innerHTML = `<div class="r"><div class="rTop">Loading…</div></div>`;
+  $("browseMore").style.display = "none";
+  $("browsePill").style.display = "none";
+
+  showBrowseModal();
+  await loadBrowsePage(false);
+}
+
+function scheduleBrowseFilter() {
+  clearTimeout(state.browse.debounce);
+  state.browse.debounce = setTimeout(async () => {
+    state.browse.q = ($("browseFilter").value || "").trim();
+    state.browse.offset = 0;
+    await loadBrowsePage(false);
+  }, 120);
+}
+
+async function browseMore() {
+  state.browse.offset += state.browse.limit;
+  await loadBrowsePage(true);
+}
+
+/* ---------------------------
    Search orchestrator
 ---------------------------- */
 
@@ -755,34 +886,48 @@ async function doSearch() {
 
   await checkHealth();
 
-  // reset paging UI for player search
   state.searchOffset = 0;
   state.searchShown = 0;
   state.searchHasMore = false;
   $("moreSearch").style.display = "none";
   $("countPill").style.display = "none";
 
-  // Set search first
   const opened = await tryOpenSetFromProducts(state.q);
+
   if (!opened && looksLikeCode(state.q)) {
     await openSetByCode(state.q);
-    $("search").value = ""; // clear after search
-    return;
-  }
-  if (opened) {
-    $("search").value = ""; // clear after search
+    $("search").value = "";
     return;
   }
 
-  // Player/subset search fallback
+  if (opened) {
+    $("search").value = "";
+    return;
+  }
+
   $("setView").style.display = "none";
   $("searchResults").style.display = "block";
   $("searchResults").innerHTML = `<div class="r"><div class="rTop">Searching…</div><div class="rSub">${escapeHtml(state.q)}</div></div>`;
 
   await searchCardsPage(false);
-
-  // clear after search to encourage next search
   $("search").value = "";
+}
+
+/* ---------------------------
+   Clear button (PRV behavior)
+---------------------------- */
+
+function clearUI() {
+  closeTypeahead();
+  $("search").value = "";
+
+  $("searchResults").style.display = "none";
+  $("searchResults").innerHTML = "";
+
+  $("setView").style.display = "none";
+
+  $("moreSearch").style.display = "none";
+  $("countPill").style.display = "none";
 }
 
 /* ---------------------------
@@ -791,6 +936,7 @@ async function doSearch() {
 
 function wire() {
   $("go").onclick = doSearch;
+  $("moreSearch").onclick = doMoreSearch;
 
   $("sport").addEventListener("change", () => {
     state.sport = $("sport").value;
@@ -800,17 +946,11 @@ function wire() {
 
   $("search").addEventListener("focus", warmTypeaheadOnce);
   $("search").addEventListener("input", scheduleTypeahead);
-
   $("search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doSearch();
     if (e.key === "Escape") closeTypeahead();
   });
-
-  $("search").addEventListener("blur", () => {
-    setTimeout(() => closeTypeahead(), 120);
-  });
-
-  $("moreSearch").onclick = doMoreSearch;
+  $("search").addEventListener("blur", () => setTimeout(closeTypeahead, 120));
 
   document.addEventListener("click", (e) => {
     const box = $("typeahead");
@@ -819,6 +959,28 @@ function wire() {
     if (e.target === inp || box.contains(e.target)) return;
     closeTypeahead();
   });
+
+  $("clearBtn").onclick = clearUI;
+
+  $("browse").onclick = openBrowse;
+  $("browseClose").onclick = hideBrowseModal;
+  $("browseModal").addEventListener("click", (e) => {
+    if (e.target && e.target.id === "browseModal") hideBrowseModal();
+  });
+  $("browseFilter").addEventListener("input", scheduleBrowseFilter);
+  $("browseFilter").addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideBrowseModal();
+  });
+  $("browseMore").onclick = browseMore;
+
+  $("themeToggle").onclick = () => setTheme(state.theme === "dark" ? "light" : "dark");
+
+  // Home button (future navigation)
+  $("homeBtn").onclick = () => {
+    // For now: clear UI and focus search (acts like "home" inside this tool)
+    clearUI();
+    setTimeout(() => $("search")?.focus(), 0);
+  };
 }
 
 async function registerSW() {
@@ -827,6 +989,7 @@ async function registerSW() {
 }
 
 (async function init() {
+  loadTheme();
   loadLocal();
   wire();
   await checkHealth();
