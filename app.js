@@ -9,6 +9,7 @@
    - Product section tabs
    - Base default view
    - Card No sorting
+   - Subset grouping for Inserts/Autographs/Relics/Variations
 ========================================= */
 
 // ---------------- CONFIG ----------------
@@ -254,6 +255,44 @@ function makeTagBubble(tag) {
       white-space:nowrap;
     ">${esc(t)}</span>
   `;
+}
+
+function normalizeSubsetName(subset, fallbackLabel) {
+  const s = norm(subset);
+  return s || fallbackLabel;
+}
+
+function groupRowsBySubset(rows, fallbackLabel) {
+  const map = new Map();
+
+  rows.forEach(row => {
+    const subsetName = normalizeSubsetName(row.subset, fallbackLabel);
+    if (!map.has(subsetName)) {
+      map.set(subsetName, []);
+    }
+    map.get(subsetName).push(row);
+  });
+
+  const groups = Array.from(map.entries()).map(([subset, groupRows]) => ({
+    subset,
+    rows: sortRowsByCardNo(groupRows)
+  }));
+
+  groups.sort((a, b) => {
+    const aFirst = a.rows[0]?.card_no || "";
+    const bFirst = b.rows[0]?.card_no || "";
+
+    const av = toCardNoSortValue(aFirst);
+    const bv = toCardNoSortValue(bFirst);
+
+    if (av[0] !== bv[0]) return av[0] - bv[0];
+    if (av[1] < bv[1]) return -1;
+    if (av[1] > bv[1]) return 1;
+
+    return lower(a.subset).localeCompare(lower(b.subset));
+  });
+
+  return groups;
 }
 
 // ---------------- API ----------------
@@ -641,12 +680,13 @@ function renderCurrentProductTab() {
   }
 
   const vars = getThemeVars();
-  const title = esc(currentProductMeta?.displayName || "Checklist Results");
   const codeBadge = esc(currentProductMeta?.code || "");
   const availableTabs = getAvailableTabs(currentProductRows);
   const filteredRows = filterRowsForTab(currentProductRows, currentProductTab);
-
   const rowCountLabel = `${filteredRows.length.toLocaleString()} Card${filteredRows.length === 1 ? "" : "s"}`;
+
+  const groupedView = currentProductTab !== "Base";
+  const subsetBlocks = groupedView ? groupRowsBySubset(filteredRows, currentProductTab) : [];
 
   elResults.innerHTML = `
     <div class="card">
@@ -698,11 +738,82 @@ function renderCurrentProductTab() {
         </div>
       ` : ""}
 
+      ${
+        currentProductTab === "Base"
+          ? renderSingleChecklistTable(filteredRows, vars, "Base")
+          : renderSubsetBlocks(subsetBlocks, vars)
+      }
+    </div>
+  `;
+
+  bindProductTabButtons();
+}
+
+function renderSingleChecklistTable(rows, vars, emptyLabel) {
+  return `
+    <div style="
+      border:1px solid ${vars.divider};
+      border-radius:16px;
+      overflow:hidden;
+      margin-top:8px;
+    ">
+      <table style="margin-top:0;">
+        <thead>
+          <tr>
+            <th>Card No.</th>
+            <th>Player</th>
+            <th>Team</th>
+            <th>Tag</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.length ? rows.map(r => `
+            <tr>
+              <td>${esc(r.card_no || "")}</td>
+              <td>${esc(r.player || "")}</td>
+              <td>${esc(r.team || "")}</td>
+              <td>${makeTagBubble(r.tag)}</td>
+            </tr>
+          `).join("") : `
+            <tr>
+              <td colspan="4" style="padding:16px 12px;color:${vars.subText};">No cards found in ${esc(emptyLabel)}.</td>
+            </tr>
+          `}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderSubsetBlocks(groups, vars) {
+  if (!groups.length) {
+    return `
       <div style="
         border:1px solid ${vars.divider};
         border-radius:16px;
         overflow:hidden;
         margin-top:8px;
+      ">
+        <table style="margin-top:0;">
+          <tbody>
+            <tr>
+              <td style="padding:16px 12px;color:${vars.subText};">No cards found in ${esc(currentProductTab)}.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  return groups.map(group => `
+    <div style="margin-top:18px;">
+      <div style="font-weight:800;font-size:18px;line-height:1.15;margin-bottom:2px;">${esc(group.subset)}</div>
+      <div style="color:${vars.subText};font-size:13px;margin-bottom:12px;">${esc(group.rows.length.toLocaleString())} Card${group.rows.length === 1 ? "" : "s"}</div>
+
+      <div style="
+        border:1px solid ${vars.divider};
+        border-radius:16px;
+        overflow:hidden;
       ">
         <table style="margin-top:0;">
           <thead>
@@ -714,25 +825,19 @@ function renderCurrentProductTab() {
             </tr>
           </thead>
           <tbody>
-            ${filteredRows.length ? filteredRows.map(r => `
+            ${group.rows.map(r => `
               <tr>
                 <td>${esc(r.card_no || "")}</td>
                 <td>${esc(r.player || "")}</td>
                 <td>${esc(r.team || "")}</td>
                 <td>${makeTagBubble(r.tag)}</td>
               </tr>
-            `).join("") : `
-              <tr>
-                <td colspan="4" style="padding:16px 12px;color:${vars.subText};">No cards found in ${esc(currentProductTab)}.</td>
-              </tr>
-            `}
+            `).join("")}
           </tbody>
         </table>
       </div>
     </div>
-  `;
-
-  bindProductTabButtons();
+  `).join("");
 }
 
 function bindProductTabButtons() {
