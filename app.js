@@ -3,7 +3,8 @@
    Mirrors Print Run Vault UX
    Adds:
    - Sport picker
-   - Fast SearchIndex autocomplete
+   - Instant local product autocomplete
+   - Remote SearchIndex enrichment
    - Broader checklist search
 ========================================= */
 
@@ -20,11 +21,14 @@ const elDD = document.getElementById("dropdown");
 const elResults = document.getElementById("results");
 const elThemeBtn = document.getElementById("themeToggle");
 const elSport = document.getElementById("sport");
+const elBtnSearch = document.getElementById("btnSearch");
+const elBtnClear = document.getElementById("btnClear");
 
 // ---------------- STATE ----------------
 let INDEX = [];
 let selected = null;
 let searchTimer = null;
+let activeTypeaheadToken = 0;
 
 // ---------------- THEME ----------------
 function setTheme(theme) {
@@ -90,9 +94,39 @@ function getSportValue() {
   return elSport ? elSport.value : "";
 }
 
-function debounce(fn, wait = 180) {
+function debounce(fn, wait = 80) {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(fn, wait);
+}
+
+function setLoadingState(isLoading) {
+  if (elBtnSearch) {
+    elBtnSearch.disabled = !!isLoading;
+    elBtnSearch.textContent = isLoading ? "Loading..." : "Search";
+  }
+}
+
+function sortByDisplayPriority(items) {
+  const typeRank = {
+    product: 1,
+    player: 2,
+    team: 3,
+    subset: 4,
+    section: 5,
+    tag: 6
+  };
+
+  return items.slice().sort((a, b) => {
+    const aRank = typeRank[lower(a.type)] || 99;
+    const bRank = typeRank[lower(b.type)] || 99;
+    if (aRank !== bRank) return aRank - bRank;
+
+    const aYear = Number(a.year) || 0;
+    const bYear = Number(b.year) || 0;
+    if (bYear !== aYear) return bYear - aYear;
+
+    return String(a.term || a.displayName || "").localeCompare(String(b.term || b.displayName || ""));
+  });
 }
 
 // ---------------- API ----------------
@@ -116,8 +150,11 @@ async function api(action, payload = {}) {
 function loadCachedIndex_() {
   const cached = localStorage.getItem(INDEX_KEY);
   if (!cached) return [];
-  try { return JSON.parse(cached) || []; }
-  catch (e) { return []; }
+  try {
+    return JSON.parse(cached) || [];
+  } catch (e) {
+    return [];
+  }
 }
 
 function storeIndex_(indexArr, versionStr) {
@@ -149,6 +186,7 @@ async function ensureFreshIndex_() {
 (async function init() {
   loadTheme();
   await ensureFreshIndex_();
+  console.log("INDEX loaded:", INDEX.length, INDEX.slice(0, 5));
 })();
 
 // ---------------- DROPDOWN ----------------
@@ -163,6 +201,8 @@ function closeDropdown() {
 }
 
 function dropdownItemHtml(item) {
+  const typeLabel = fmtType(item.type || "product");
+
   return `
     <div class="ddItem"
          data-code="${esc(item.code || "")}"
@@ -171,9 +211,9 @@ function dropdownItemHtml(item) {
          data-term="${esc(item.term || item.displayName || "")}">
       <div class="ddTitle">${esc(item.term || item.displayName || "")}</div>
       <div class="ddMeta">
-        ${esc(fmtType(item.type || "product"))}
+        ${esc(typeLabel)}
         ${item.sport ? ` • ${esc(item.sport)}` : ""}
-        ${item.displayName ? ` • ${esc(item.displayName)}` : ""}
+        ${item.displayName && lower(item.term) !== lower(item.displayName) ? ` • ${esc(item.displayName)}` : ""}
       </div>
     </div>
   `;
@@ -187,7 +227,6 @@ function bindDropdownItems(items) {
 
       selected = item;
       elQ.value = item.term || item.displayName || "";
-
       closeDropdown();
 
       if (lower(item.type) === "product" && item.code) {
@@ -196,12 +235,24 @@ function bindDropdownItems(items) {
           year: item.year || "",
           sport: item.sport || ""
         });
+
         await runProductSearch(item.code, item.sport);
       } else {
         await runBroadSearch(item.term || elQ.value, item.sport || getSportValue());
       }
     };
   });
+}
+
+function renderDropdownItems(items) {
+  if (!items || !items.length) {
+    closeDropdown();
+    return;
+  }
+
+  const sorted = sortByDisplayPriority(items);
+  openDropdown(sorted.map(dropdownItemHtml).join(""));
+  bindDropdownItems(sorted);
 }
 
 // ---------------- LOGGING ----------------
@@ -215,9 +266,76 @@ function logSelectionFireAndForget_(sel) {
   }).catch(() => {});
 }
 
+// ---------------- LOCAL TYPEAHEAD ----------------
+function dedupeTypeaheadResults(rows) {
+  const seen = {};
+  const out = [];
+
+  rows.forEach(r => {
+    const key = [
+      lower(r.type),
+      lower(r.sport),
+      lower(r.code),
+      lower(r.term)
+    ].join("||");
+
+    if (seen[key]) return;
+    seen[key] = true;
+    out.push(r);
+  });
+
+  return out;
+}
+
+function makeProductHitsFromLocalIndex(q, sport, limit = 8) {
+  const needle = lower(q);
+
+  let rows = INDEX.slice();
+
+  if (sport) {
+    rows = rows.filter(r => lower(r.sport) === lower(sport));
+  }
+
+  const exact = [];
+  const starts = [];
+  const contains = [];
+
+  rows.forEach(r => {
+    const displayName = lower(r.DisplayName);
+    const keywords = lower(r.Keywords);
+    const code = lower(r.Code);
+    const hay = `${displayName} | ${keywords} | ${code}`;
+
+    if (!hay.includes(needle)) return;
+
+    const out = {
+      term: r.DisplayName,
+      type: "product",
+      sport: r.sport,
+      code: r.Code,
+      displayName: r.DisplayName,
+      year: r.year,
+      manufacturer: r.manufacturer,
+      product: r.product
+    };
+
+    if (displayName === needle || code === needle) exact.push(out);
+    else if (displayName.indexOf(needle) === 0 || keywords.indexOf(needle) === 0 || code.indexOf(needle) === 0) starts.push(out);
+    else contains.push(out);
+  });
+
+  return dedupeTypeaheadResults(exact.concat(starts, contains)).slice(0, limit);
+}
+
+function mergeTypeaheadResults(localHits, remoteHits, limit = 10) {
+  return dedupeTypeaheadResults([...(localHits || []), ...(remoteHits || [])]).slice(0, limit);
+}
+
 // ---------------- FAST AUTOCOMPLETE ----------------
 async function runTypeahead() {
-  const q = lower(elQ.value);
+  const token = ++activeTypeaheadToken;
+  const q = norm(elQ.value);
+  const sport = getSportValue();
   selected = null;
 
   if (q.length < 2) {
@@ -225,34 +343,33 @@ async function runTypeahead() {
     return;
   }
 
+  // 1) Instant local product suggestions
+  const localHits = makeProductHitsFromLocalIndex(q, sport, 8);
+  renderDropdownItems(localHits);
+
+  // 2) Optional async enrichment from SearchIndex
   try {
-    const sport = getSportValue();
     const data = await api("searchIndex", {
       q,
       sport,
       limit: 10
     });
 
-    const hits = Array.isArray(data.results) ? data.results : [];
+    if (token !== activeTypeaheadToken) return;
 
-    if (!hits.length) {
-      closeDropdown();
-      return;
-    }
+    const remoteHits = Array.isArray(data.results) ? data.results : [];
+    const merged = mergeTypeaheadResults(localHits, remoteHits, 10);
 
-    openDropdown(hits.map(dropdownItemHtml).join(""));
-    bindDropdownItems(hits);
-
+    renderDropdownItems(merged);
   } catch (e) {
-    console.warn("Typeahead failed", e);
-    closeDropdown();
+    console.warn("Remote SearchIndex typeahead failed; local suggestions still shown.", e);
   }
 }
 
 elQ.addEventListener("input", () => {
   debounce(() => {
     runTypeahead();
-  }, 140);
+  }, 80);
 });
 
 document.addEventListener("click", (e) => {
@@ -269,14 +386,18 @@ elQ.addEventListener("keydown", (e) => {
 });
 
 // ---------------- BUTTONS ----------------
-document.getElementById("btnSearch").onclick = runSearch;
+if (elBtnSearch) {
+  elBtnSearch.onclick = runSearch;
+}
 
-document.getElementById("btnClear").onclick = () => {
-  elQ.value = "";
-  selected = null;
-  closeDropdown();
-  elResults.innerHTML = `<div class="card" style="opacity:.8;">No results yet. Run a search.</div>`;
-};
+if (elBtnClear) {
+  elBtnClear.onclick = () => {
+    elQ.value = "";
+    selected = null;
+    closeDropdown();
+    elResults.innerHTML = `<div class="card" style="opacity:.8;">No results yet. Run a search.</div>`;
+  };
+}
 
 if (elSport) {
   elSport.addEventListener("change", () => {
@@ -300,7 +421,6 @@ async function runSearch() {
     return;
   }
 
-  // fallback: try local product match first from cached INDEX
   const localMatch = INDEX.find(i => {
     const sameSport = !sport || lower(i.sport) === lower(sport);
     if (!sameSport) return false;
@@ -334,18 +454,23 @@ async function runSearch() {
 
 // ---------------- PRODUCT SEARCH ----------------
 async function runProductSearch(code, sport) {
+  setLoadingState(true);
   elResults.innerHTML = `<div class="card" style="opacity:.8;">Loading…</div>`;
 
   try {
     const data = await api("getRowsByCode", { code, sport });
     renderProductResults(data.meta, data.rows || []);
   } catch (e) {
+    console.error(e);
     elResults.innerHTML = `<div class="card" style="opacity:.8;">Error loading checklist data.</div>`;
+  } finally {
+    setLoadingState(false);
   }
 }
 
 // ---------------- BROADER SEARCH ----------------
 async function runBroadSearch(q, sport) {
+  setLoadingState(true);
   elResults.innerHTML = `<div class="card" style="opacity:.8;">Searching…</div>`;
 
   try {
@@ -357,7 +482,10 @@ async function runBroadSearch(q, sport) {
 
     renderBroadResults(q, data.results || [], sport);
   } catch (e) {
+    console.error(e);
     elResults.innerHTML = `<div class="card" style="opacity:.8;">Error loading search results.</div>`;
+  } finally {
+    setLoadingState(false);
   }
 }
 
@@ -417,7 +545,7 @@ function renderBroadResults(q, rows, sport) {
     return;
   }
 
-  const titleBits = [`Search Results`];
+  const titleBits = ["Search Results"];
   if (sport) titleBits.push(esc(sport));
 
   elResults.innerHTML = `
