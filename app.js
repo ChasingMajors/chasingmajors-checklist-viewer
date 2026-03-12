@@ -821,7 +821,7 @@ function renderSubsetBlocks(groups, vars) {
               <th>Card No.</th>
               <th>Player</th>
               <th>Team</th>
-              <th>Tag</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -874,7 +874,7 @@ function renderBroadResults(q, rows, sport) {
             <th>Card No.</th>
             <th>Player</th>
             <th>Team</th>
-            <th>Tag</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
