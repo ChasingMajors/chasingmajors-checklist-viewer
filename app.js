@@ -6,6 +6,9 @@
    - Instant local product autocomplete
    - Remote SearchIndex enrichment
    - Broader checklist search
+   - Product section tabs
+   - Base default view
+   - Card No sorting
 ========================================= */
 
 // ---------------- CONFIG ----------------
@@ -29,6 +32,10 @@ let INDEX = [];
 let selected = null;
 let searchTimer = null;
 let activeTypeaheadToken = 0;
+
+let currentProductMeta = null;
+let currentProductRows = [];
+let currentProductTab = "Base";
 
 // ---------------- THEME ----------------
 function setTheme(theme) {
@@ -62,6 +69,9 @@ if (elThemeBtn) {
   elThemeBtn.addEventListener("click", () => {
     const cur = document.documentElement.getAttribute("data-theme") || "dark";
     setTheme(cur === "dark" ? "light" : "dark");
+    if (currentProductMeta && currentProductRows.length) {
+      renderCurrentProductTab();
+    }
   });
 }
 
@@ -127,6 +137,123 @@ function sortByDisplayPriority(items) {
 
     return String(a.term || a.displayName || "").localeCompare(String(b.term || b.displayName || ""));
   });
+}
+
+function getThemeVars() {
+  const isLight = document.documentElement.getAttribute("data-theme") === "light";
+
+  return {
+    pillBg: isLight ? "rgba(0,0,0,0.04)" : "rgba(255,255,255,0.04)",
+    pillBorder: isLight ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.12)",
+    pillText: isLight ? "#0b0b0b" : "#ffffff",
+    pillActiveBg: isLight ? "#111111" : "rgba(255,255,255,0.96)",
+    pillActiveText: isLight ? "#ffffff" : "#000000",
+    badgeBg: isLight ? "rgba(0,0,0,0.04)" : "rgba(255,255,255,0.08)",
+    badgeBorder: isLight ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.14)",
+    badgeText: isLight ? "rgba(0,0,0,0.78)" : "rgba(255,255,255,0.86)",
+    subText: isLight ? "rgba(0,0,0,0.70)" : "rgba(255,255,255,0.78)",
+    divider: isLight ? "rgba(0,0,0,0.10)" : "rgba(255,255,255,0.10)"
+  };
+}
+
+function toCardNoSortValue(v) {
+  const s = norm(v);
+  if (!s) return [2, "", ""];
+
+  const n = Number(s);
+  if (Number.isFinite(n)) return [0, n, s];
+
+  const m = s.match(/^(\d+)(.*)$/);
+  if (m) {
+    return [1, Number(m[1]), s.toLowerCase()];
+  }
+
+  return [2, s.toLowerCase(), s.toLowerCase()];
+}
+
+function sortRowsByCardNo(rows) {
+  return rows.slice().sort((a, b) => {
+    const av = toCardNoSortValue(a.card_no);
+    const bv = toCardNoSortValue(b.card_no);
+
+    if (av[0] !== bv[0]) return av[0] - bv[0];
+    if (av[1] < bv[1]) return -1;
+    if (av[1] > bv[1]) return 1;
+
+    const ap = lower(a.player);
+    const bp = lower(b.player);
+    if (ap < bp) return -1;
+    if (ap > bp) return 1;
+
+    return 0;
+  });
+}
+
+function normalizeSectionName(section) {
+  return lower(section).replace(/\s+/g, " ").trim();
+}
+
+function getTabConfig() {
+  return [
+    {
+      key: "Base",
+      match: row => normalizeSectionName(row.section) === "base"
+    },
+    {
+      key: "Inserts",
+      match: row => normalizeSectionName(row.section) === "insert"
+    },
+    {
+      key: "Autographs",
+      match: row => {
+        const s = normalizeSectionName(row.section);
+        return s === "autograph" || s === "auto relic";
+      }
+    },
+    {
+      key: "Relics",
+      match: row => normalizeSectionName(row.section) === "relic"
+    },
+    {
+      key: "Variations",
+      match: row => normalizeSectionName(row.section) === "variation"
+    }
+  ];
+}
+
+function getAvailableTabs(rows) {
+  return getTabConfig().filter(tab => rows.some(tab.match));
+}
+
+function filterRowsForTab(rows, tabKey) {
+  const tab = getTabConfig().find(t => t.key === tabKey);
+  if (!tab) return [];
+  return sortRowsByCardNo(rows.filter(tab.match));
+}
+
+function makeTagBubble(tag) {
+  const t = norm(tag);
+  if (!t) return "";
+
+  const vars = getThemeVars();
+
+  return `
+    <span style="
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      padding:2px 8px;
+      min-height:22px;
+      border-radius:999px;
+      font-size:12px;
+      font-weight:700;
+      line-height:1;
+      background:${vars.badgeBg};
+      border:1px solid ${vars.badgeBorder};
+      color:${vars.badgeText};
+      white-space:nowrap;
+    ">${esc(t)}</span>
+  `;
 }
 
 // ---------------- API ----------------
@@ -343,11 +470,9 @@ async function runTypeahead() {
     return;
   }
 
-  // 1) Instant local product suggestions
   const localHits = makeProductHitsFromLocalIndex(q, sport, 8);
   renderDropdownItems(localHits);
 
-  // 2) Optional async enrichment from SearchIndex
   try {
     const data = await api("searchIndex", {
       q,
@@ -394,6 +519,9 @@ if (elBtnClear) {
   elBtnClear.onclick = () => {
     elQ.value = "";
     selected = null;
+    currentProductMeta = null;
+    currentProductRows = [];
+    currentProductTab = "Base";
     closeDropdown();
     elResults.innerHTML = `<div class="card" style="opacity:.8;">No results yet. Run a search.</div>`;
   };
@@ -459,7 +587,19 @@ async function runProductSearch(code, sport) {
 
   try {
     const data = await api("getRowsByCode", { code, sport });
-    renderProductResults(data.meta, data.rows || []);
+    currentProductMeta = data.meta || null;
+    currentProductRows = Array.isArray(data.rows) ? data.rows : [];
+
+    const availableTabs = getAvailableTabs(currentProductRows);
+    if (availableTabs.some(t => t.key === "Base")) {
+      currentProductTab = "Base";
+    } else if (availableTabs.length) {
+      currentProductTab = availableTabs[0].key;
+    } else {
+      currentProductTab = "Base";
+    }
+
+    renderCurrentProductTab();
   } catch (e) {
     console.error(e);
     elResults.innerHTML = `<div class="card" style="opacity:.8;">Error loading checklist data.</div>`;
@@ -470,6 +610,10 @@ async function runProductSearch(code, sport) {
 
 // ---------------- BROADER SEARCH ----------------
 async function runBroadSearch(q, sport) {
+  currentProductMeta = null;
+  currentProductRows = [];
+  currentProductTab = "Base";
+
   setLoadingState(true);
   elResults.innerHTML = `<div class="card" style="opacity:.8;">Searching…</div>`;
 
@@ -489,53 +633,116 @@ async function runBroadSearch(q, sport) {
   }
 }
 
-// ---------------- RENDER PRODUCT ----------------
-function renderProductResults(meta, rows) {
-  if (!rows.length) {
+// ---------------- PRODUCT TAB RENDERING ----------------
+function renderCurrentProductTab() {
+  if (!currentProductMeta || !currentProductRows.length) {
     elResults.innerHTML = `<div class="card" style="opacity:.8;">No checklist rows found.</div>`;
     return;
   }
 
-  const title = esc(meta?.displayName || "Checklist Results");
-  const subParts = [
-    meta?.year,
-    meta?.sport,
-    meta?.manufacturer
-  ].filter(Boolean).map(esc);
+  const vars = getThemeVars();
+  const title = esc(currentProductMeta?.displayName || "Checklist Results");
+  const codeBadge = esc(currentProductMeta?.code || "");
+  const availableTabs = getAvailableTabs(currentProductRows);
+  const filteredRows = filterRowsForTab(currentProductRows, currentProductTab);
 
-  const sub = subParts.join(" • ");
+  const rowCountLabel = `${filteredRows.length.toLocaleString()} Card${filteredRows.length === 1 ? "" : "s"}`;
 
   elResults.innerHTML = `
     <div class="card">
-      <div style="font-weight:800;margin-bottom:6px;">${title}</div>
-      <div style="opacity:.75;font-size:13px;margin-bottom:10px;">${sub}</div>
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:800;font-size:20px;line-height:1.15;margin-bottom:4px;">${esc(currentProductTab)} Checklist</div>
+          <div style="color:${vars.subText};font-size:13px;">${esc(rowCountLabel)}</div>
+        </div>
 
-      <table>
-        <thead>
-          <tr>
-            <th>Section</th>
-            <th>Subset</th>
-            <th>Card No</th>
-            <th>Player</th>
-            <th>Team</th>
-            <th>Tag</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map(r => `
+        ${codeBadge ? `
+          <div style="
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            padding:6px 12px;
+            border-radius:999px;
+            font-size:13px;
+            font-weight:700;
+            background:${vars.badgeBg};
+            border:1px solid ${vars.badgeBorder};
+            color:${vars.badgeText};
+            white-space:nowrap;
+          ">${codeBadge}</div>
+        ` : ""}
+      </div>
+
+      ${availableTabs.length ? `
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;margin-bottom:14px;">
+          ${availableTabs.map(tab => {
+            const isActive = tab.key === currentProductTab;
+            return `
+              <button
+                type="button"
+                class="cv-tab-btn"
+                data-tab="${esc(tab.key)}"
+                style="
+                  border:1px solid ${isActive ? vars.pillActiveBg : vars.pillBorder};
+                  background:${isActive ? vars.pillActiveBg : vars.pillBg};
+                  color:${isActive ? vars.pillActiveText : vars.pillText};
+                  border-radius:999px;
+                  padding:8px 14px;
+                  font-size:14px;
+                  font-weight:700;
+                  cursor:pointer;
+                "
+              >${esc(tab.key)}</button>
+            `;
+          }).join("")}
+        </div>
+      ` : ""}
+
+      <div style="
+        border:1px solid ${vars.divider};
+        border-radius:16px;
+        overflow:hidden;
+        margin-top:8px;
+      ">
+        <table style="margin-top:0;">
+          <thead>
             <tr>
-              <td>${esc(r.section || "")}</td>
-              <td>${esc(r.subset || "")}</td>
-              <td>${esc(r.card_no || "")}</td>
-              <td>${esc(r.player || "")}</td>
-              <td>${esc(r.team || "")}</td>
-              <td>${esc(r.tag || "")}</td>
+              <th>Card No.</th>
+              <th>Player</th>
+              <th>Team</th>
+              <th>Tag</th>
             </tr>
-          `).join("")}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            ${filteredRows.length ? filteredRows.map(r => `
+              <tr>
+                <td>${esc(r.card_no || "")}</td>
+                <td>${esc(r.player || "")}</td>
+                <td>${esc(r.team || "")}</td>
+                <td>${makeTagBubble(r.tag)}</td>
+              </tr>
+            `).join("") : `
+              <tr>
+                <td colspan="4" style="padding:16px 12px;color:${vars.subText};">No cards found in ${esc(currentProductTab)}.</td>
+              </tr>
+            `}
+          </tbody>
+        </table>
+      </div>
     </div>
   `;
+
+  bindProductTabButtons();
+}
+
+function bindProductTabButtons() {
+  const buttons = elResults.querySelectorAll(".cv-tab-btn");
+  buttons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      currentProductTab = btn.getAttribute("data-tab") || "Base";
+      renderCurrentProductTab();
+    });
+  });
 }
 
 // ---------------- RENDER BROADER SEARCH ----------------
@@ -545,6 +752,7 @@ function renderBroadResults(q, rows, sport) {
     return;
   }
 
+  const sortedRows = sortRowsByCardNo(rows);
   const titleBits = ["Search Results"];
   if (sport) titleBits.push(esc(sport));
 
@@ -558,25 +766,21 @@ function renderBroadResults(q, rows, sport) {
           <tr>
             <th>Sport</th>
             <th>Product</th>
-            <th>Section</th>
-            <th>Subset</th>
-            <th>Card No</th>
+            <th>Card No.</th>
             <th>Player</th>
             <th>Team</th>
             <th>Tag</th>
           </tr>
         </thead>
         <tbody>
-          ${rows.map(r => `
+          ${sortedRows.map(r => `
             <tr>
               <td>${esc(r.sport || "")}</td>
               <td>${esc(r.displayName || "")}</td>
-              <td>${esc(r.section || "")}</td>
-              <td>${esc(r.subset || "")}</td>
               <td>${esc(r.card_no || "")}</td>
               <td>${esc(r.player || "")}</td>
               <td>${esc(r.team || "")}</td>
-              <td>${esc(r.tag || "")}</td>
+              <td>${makeTagBubble(r.tag)}</td>
             </tr>
           `).join("")}
         </tbody>
