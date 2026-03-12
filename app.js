@@ -680,7 +680,7 @@ function renderCurrentProductTab() {
   }
 
   const vars = getThemeVars();
-  const codeBadge = esc(currentProductMeta?.code || "");
+  const codeBadge = esc(currentProductMeta?.displayName || "");
   const availableTabs = getAvailableTabs(currentProductRows);
   const filteredRows = filterRowsForTab(currentProductRows, currentProductTab);
   const rowCountLabel = `${filteredRows.length.toLocaleString()} Card${filteredRows.length === 1 ? "" : "s"}`;
@@ -763,7 +763,7 @@ function renderSingleChecklistTable(rows, vars, emptyLabel) {
             <th>Card No.</th>
             <th>Player</th>
             <th>Team</th>
-            <th>Tag</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
