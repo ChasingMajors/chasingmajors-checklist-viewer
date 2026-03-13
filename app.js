@@ -927,7 +927,7 @@ function renderBroadResults(q, rows, sport, pageInfo) {
   const pageSize = Number(pageInfo?.pageSize) || BROAD_PAGE_SIZE;
   const start = total ? ((page - 1) * pageSize) + 1 : 0;
   const end = Math.min(page * pageSize, total);
-  const showSportCol = !sport;
+  const showSportCol = false;
 
   elResults.innerHTML = `
     <div class="card">
@@ -943,7 +943,6 @@ function renderBroadResults(q, rows, sport, pageInfo) {
         <table style="margin-top:0;">
           <thead>
             <tr>
-              ${showSportCol ? `<th>Sport</th>` : ``}
               <th>Product</th>
               <th>Subset</th>
               <th>Card No.</th>
@@ -955,7 +954,6 @@ function renderBroadResults(q, rows, sport, pageInfo) {
           <tbody>
             ${sortedRows.map(r => `
               <tr>
-                ${showSportCol ? `<td>${esc(r.sport || "")}</td>` : ``}
                 <td>${esc(r.displayName || "")}</td>
                 <td>${esc(r.subset || "")}</td>
                 <td>${esc(r.card_no || "")}</td>
