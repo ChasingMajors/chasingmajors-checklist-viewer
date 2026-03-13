@@ -10,14 +10,16 @@
    - Base default view
    - Card No sorting
    - Subset grouping for Inserts/Autographs/Relics/Variations
+   - Broad search paging
 ========================================= */
 
 // ---------------- CONFIG ----------------
-const EXEC_URL = "https://script.google.com/macros/s/AKfycbyAKFlo_hl6INtO0you2_A7tmbvQin3Qrmuo3Xm8fNzAuJ0yZE9ex45eT5Bx4hJmYzF/exec";
+const EXEC_URL = "https://script.google.com/macros/s/AKfycbw_n-hH_noxpPsBSnY_TQgsHTMrn2PzuS4POaQteIS12VhpQhr7YaW5A6PAxhzHpzCG/exec";
 
 const INDEX_KEY = "cv_index_v1";
 const INDEX_VER_KEY = "cv_index_ver_v1";
 const THEME_KEY = "cm_theme";
+const BROAD_PAGE_SIZE = 50;
 
 // ---------------- DOM ----------------
 const elQ = document.getElementById("q");
@@ -37,6 +39,15 @@ let activeTypeaheadToken = 0;
 let currentProductMeta = null;
 let currentProductRows = [];
 let currentProductTab = "Base";
+
+let broadSearchState = {
+  q: "",
+  sport: "",
+  page: 1,
+  pageSize: BROAD_PAGE_SIZE,
+  total: 0,
+  totalPages: 0
+};
 
 // ---------------- THEME ----------------
 function setTheme(theme) {
@@ -70,8 +81,15 @@ if (elThemeBtn) {
   elThemeBtn.addEventListener("click", () => {
     const cur = document.documentElement.getAttribute("data-theme") || "dark";
     setTheme(cur === "dark" ? "light" : "dark");
+
     if (currentProductMeta && currentProductRows.length) {
       renderCurrentProductTab();
+    } else if (broadSearchState.q) {
+      runBroadSearch(
+        broadSearchState.q,
+        broadSearchState.sport,
+        broadSearchState.page
+      );
     }
   });
 }
@@ -404,7 +422,7 @@ function bindDropdownItems(items) {
 
         await runProductSearch(item.code, item.sport);
       } else {
-        await runBroadSearch(item.term || elQ.value, item.sport || getSportValue());
+        await runBroadSearch(item.term || elQ.value, item.sport || getSportValue(), 1);
       }
     };
   });
@@ -561,6 +579,14 @@ if (elBtnClear) {
     currentProductMeta = null;
     currentProductRows = [];
     currentProductTab = "Base";
+    broadSearchState = {
+      q: "",
+      sport: "",
+      page: 1,
+      pageSize: BROAD_PAGE_SIZE,
+      total: 0,
+      totalPages: 0
+    };
     closeDropdown();
     elResults.innerHTML = `<div class="card" style="opacity:.8;">No results yet. Run a search.</div>`;
   };
@@ -616,11 +642,22 @@ async function runSearch() {
     return;
   }
 
-  await runBroadSearch(q, sport);
+  await runBroadSearch(q, sport, 1);
 }
 
 // ---------------- PRODUCT SEARCH ----------------
 async function runProductSearch(code, sport) {
+  currentProductMeta = null;
+  currentProductRows = [];
+  broadSearchState = {
+    q: "",
+    sport: "",
+    page: 1,
+    pageSize: BROAD_PAGE_SIZE,
+    total: 0,
+    totalPages: 0
+  };
+
   setLoadingState(true);
   elResults.innerHTML = `<div class="card" style="opacity:.8;">Loading…</div>`;
 
@@ -648,10 +685,15 @@ async function runProductSearch(code, sport) {
 }
 
 // ---------------- BROADER SEARCH ----------------
-async function runBroadSearch(q, sport) {
+async function runBroadSearch(q, sport, page = 1) {
   currentProductMeta = null;
   currentProductRows = [];
   currentProductTab = "Base";
+
+  broadSearchState.q = q;
+  broadSearchState.sport = sport || "";
+  broadSearchState.page = page;
+  broadSearchState.pageSize = BROAD_PAGE_SIZE;
 
   setLoadingState(true);
   elResults.innerHTML = `<div class="card" style="opacity:.8;">Searching…</div>`;
@@ -660,10 +702,21 @@ async function runBroadSearch(q, sport) {
     const data = await api("searchCards", {
       q,
       sport,
-      limit: 50
+      limit: BROAD_PAGE_SIZE,
+      page
     });
 
-    renderBroadResults(q, data.results || [], sport);
+    broadSearchState.total = Number(data.total) || 0;
+    broadSearchState.totalPages = Number(data.totalPages) || 0;
+    broadSearchState.page = Number(data.page) || 1;
+    broadSearchState.pageSize = Number(data.pageSize) || BROAD_PAGE_SIZE;
+
+    renderBroadResults(q, data.results || [], sport, {
+      total: broadSearchState.total,
+      page: broadSearchState.page,
+      pageSize: broadSearchState.pageSize,
+      totalPages: broadSearchState.totalPages
+    });
   } catch (e) {
     console.error(e);
     elResults.innerHTML = `<div class="card" style="opacity:.8;">Error loading search results.</div>`;
@@ -680,7 +733,7 @@ function renderCurrentProductTab() {
   }
 
   const vars = getThemeVars();
-  const codeBadge = esc(currentProductMeta?.displayName || "");
+  const displayBadge = esc(currentProductMeta?.displayName || "");
   const availableTabs = getAvailableTabs(currentProductRows);
   const filteredRows = filterRowsForTab(currentProductRows, currentProductTab);
   const rowCountLabel = `${filteredRows.length.toLocaleString()} Card${filteredRows.length === 1 ? "" : "s"}`;
@@ -696,7 +749,7 @@ function renderCurrentProductTab() {
           <div style="color:${vars.subText};font-size:13px;">${esc(rowCountLabel)}</div>
         </div>
 
-        ${codeBadge ? `
+        ${displayBadge ? `
           <div style="
             display:inline-flex;
             align-items:center;
@@ -709,7 +762,7 @@ function renderCurrentProductTab() {
             border:1px solid ${vars.badgeBorder};
             color:${vars.badgeText};
             white-space:nowrap;
-          ">${codeBadge}</div>
+          ">${displayBadge}</div>
         ` : ""}
       </div>
 
@@ -850,46 +903,126 @@ function bindProductTabButtons() {
   });
 }
 
-// ---------------- RENDER BROADER SEARCH ----------------
-function renderBroadResults(q, rows, sport) {
+// ---------------- BROAD SEARCH RESULTS ----------------
+function renderBroadResults(q, rows, sport, pageInfo) {
+  const vars = getThemeVars();
+  const titleBits = ["Search Results"];
+  if (sport) titleBits.push(esc(sport));
+
   if (!rows.length) {
-    elResults.innerHTML = `<div class="card" style="opacity:.8;">No results found for "${esc(q)}".</div>`;
+    elResults.innerHTML = `
+      <div class="card">
+        <div style="font-weight:800;margin-bottom:6px;">${titleBits.join(" • ")}</div>
+        <div style="opacity:.75;font-size:13px;margin-bottom:10px;">Query: ${esc(q)}</div>
+        <div style="opacity:.8;">No results found for "${esc(q)}".</div>
+      </div>
+    `;
     return;
   }
 
   const sortedRows = sortRowsByCardNo(rows);
-  const titleBits = ["Search Results"];
-  if (sport) titleBits.push(esc(sport));
+  const total = Number(pageInfo?.total) || sortedRows.length;
+  const page = Number(pageInfo?.page) || 1;
+  const totalPages = Number(pageInfo?.totalPages) || 1;
+  const pageSize = Number(pageInfo?.pageSize) || BROAD_PAGE_SIZE;
+  const start = total ? ((page - 1) * pageSize) + 1 : 0;
+  const end = Math.min(page * pageSize, total);
+  const showSportCol = !sport;
 
   elResults.innerHTML = `
     <div class="card">
       <div style="font-weight:800;margin-bottom:6px;">${titleBits.join(" • ")}</div>
-      <div style="opacity:.75;font-size:13px;margin-bottom:10px;">Query: ${esc(q)}</div>
+      <div style="opacity:.75;font-size:13px;margin-bottom:6px;">Query: ${esc(q)}</div>
+      <div style="opacity:.75;font-size:13px;margin-bottom:12px;">Showing ${start.toLocaleString()}-${end.toLocaleString()} of ${total.toLocaleString()}</div>
 
-      <table>
-        <thead>
-          <tr>
-            <th>Sport</th>
-            <th>Product</th>
-            <th>Card No.</th>
-            <th>Player</th>
-            <th>Team</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          ${sortedRows.map(r => `
+      <div style="
+        border:1px solid ${vars.divider};
+        border-radius:16px;
+        overflow:hidden;
+      ">
+        <table style="margin-top:0;">
+          <thead>
             <tr>
-              <td>${esc(r.sport || "")}</td>
-              <td>${esc(r.displayName || "")}</td>
-              <td>${esc(r.card_no || "")}</td>
-              <td>${esc(r.player || "")}</td>
-              <td>${esc(r.team || "")}</td>
-              <td>${makeTagBubble(r.tag)}</td>
+              ${showSportCol ? `<th>Sport</th>` : ``}
+              <th>Product</th>
+              <th>Subset</th>
+              <th>Card No.</th>
+              <th>Player</th>
+              <th>${showSportCol ? "Team" : "Team"}</th>
+              <th></th>
             </tr>
-          `).join("")}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            ${sortedRows.map(r => `
+              <tr>
+                ${showSportCol ? `<td>${esc(r.sport || "")}</td>` : ``}
+                <td>${esc(r.displayName || "")}</td>
+                <td>${esc(r.subset || "")}</td>
+                <td>${esc(r.card_no || "")}</td>
+                <td>${esc(r.player || "")}</td>
+                <td>${esc(r.team || "")}</td>
+                <td>${makeTagBubble(r.tag)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+
+      ${totalPages > 1 ? `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;">
+          <div style="color:${vars.subText};font-size:13px;">Page ${page.toLocaleString()} of ${totalPages.toLocaleString()}</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button
+              type="button"
+              class="cv-page-btn"
+              data-page="${page - 1}"
+              ${page <= 1 ? "disabled" : ""}
+              style="
+                border:1px solid ${vars.pillBorder};
+                background:${vars.pillBg};
+                color:${vars.pillText};
+                border-radius:999px;
+                padding:8px 14px;
+                font-size:14px;
+                font-weight:700;
+                cursor:${page <= 1 ? "not-allowed" : "pointer"};
+                opacity:${page <= 1 ? ".45" : "1"};
+              "
+            >Previous</button>
+
+            <button
+              type="button"
+              class="cv-page-btn"
+              data-page="${page + 1}"
+              ${page >= totalPages ? "disabled" : ""}
+              style="
+                border:1px solid ${vars.pillBorder};
+                background:${vars.pillBg};
+                color:${vars.pillText};
+                border-radius:999px;
+                padding:8px 14px;
+                font-size:14px;
+                font-weight:700;
+                cursor:${page >= totalPages ? "not-allowed" : "pointer"};
+                opacity:${page >= totalPages ? ".45" : "1"};
+              "
+            >Next</button>
+          </div>
+        </div>
+      ` : ``}
     </div>
   `;
+
+  bindBroadPagingButtons();
+}
+
+function bindBroadPagingButtons() {
+  const buttons = elResults.querySelectorAll(".cv-page-btn");
+  buttons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      if (btn.disabled) return;
+      const nextPage = Number(btn.getAttribute("data-page")) || 1;
+      runBroadSearch(broadSearchState.q, broadSearchState.sport, nextPage);
+    });
+  });
 }
