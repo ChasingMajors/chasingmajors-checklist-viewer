@@ -1,4 +1,3 @@
-
 /* =========================================
    Checklist Vault — app.js
    Mirrors Print Run Vault UX
@@ -215,14 +214,22 @@ function normalizeSectionName(section) {
   return lower(section).replace(/\s+/g, " ").trim();
 }
 
+function getParallelSectionKeys(tabKey) {
+  const t = lower(tabKey);
+
+  if (t === "base") return ["base"];
+  if (t === "inserts") return ["insert"];
+  if (t === "autographs") return ["autograph", "auto relic"];
+  if (t === "relics") return ["relic"];
+  if (t === "variations") return ["variation"];
+
+  return [t];
+}
+
 function getTabConfig() {
   return [
     {
       key: "Base",
-      match: row => normalizeSectionName(row.section) === "base"
-    },
-    {
-      key: "Base Parallels",
       match: row => normalizeSectionName(row.section) === "base"
     },
     {
@@ -247,49 +254,13 @@ function getTabConfig() {
   ];
 }
 
-function getAvailableTabs(rows, parallels) {
-  const tabs = [];
-
-  if (rows.some(r => normalizeSectionName(r.section) === "base")) {
-    tabs.push({ key: "Base" });
-  }
-
-  const baseParallelsExist = parallels.some(p => lower(p.applies_to_section) === "base");
-  if (baseParallelsExist) {
-    tabs.push({ key: "Base Parallels" });
-  }
-
-  if (rows.some(r => normalizeSectionName(r.section) === "insert")) {
-    tabs.push({ key: "Inserts" });
-  }
-
-  if (rows.some(r => {
-    const s = normalizeSectionName(r.section);
-    return s === "autograph" || s === "auto relic";
-  })) {
-    tabs.push({ key: "Autographs" });
-  }
-
-  if (rows.some(r => normalizeSectionName(r.section) === "relic")) {
-    tabs.push({ key: "Relics" });
-  }
-
-  if (rows.some(r => normalizeSectionName(r.section) === "variation")) {
-    tabs.push({ key: "Variations" });
-  }
-
-  return tabs;
+function getAvailableTabs(rows) {
+  return getTabConfig()
+    .filter(tab => rows.some(tab.match))
+    .map(tab => ({ key: tab.key }));
 }
 
 function filterRowsForTab(rows, tabKey) {
-  if (tabKey === "Base") {
-    return sortRowsByCardNo(rows.filter(r => normalizeSectionName(r.section) === "base"));
-  }
-
-  if (tabKey === "Base Parallels") {
-    return sortRowsByCardNo(rows.filter(r => normalizeSectionName(r.section) === "base"));
-  }
-
   const tab = getTabConfig().find(t => t.key === tabKey);
   if (!tab) return [];
   return sortRowsByCardNo(rows.filter(tab.match));
@@ -393,14 +364,16 @@ function sortParallels(parallels) {
 }
 
 function getParallelsForSectionSubset(section, subset) {
-  const targetSection = lower(section);
+  const targetSections = Array.isArray(section)
+    ? section.map(lower)
+    : [lower(section)];
   const targetSubset = lower(subset);
 
   return currentProductParallels.filter(p => {
     const sec = lower(p.applies_to_section);
     const sub = lower(p.applies_to_subset);
 
-    const secMatch = !sec || sec === targetSection;
+    const secMatch = !sec || targetSections.includes(sec);
     const subsetMatch = !sub || sub === targetSubset;
 
     return secMatch && subsetMatch;
@@ -783,7 +756,7 @@ async function runProductSearch(code, sport) {
     currentProductRows = Array.isArray(data.rows) ? data.rows : [];
     currentProductParallels = Array.isArray(data.parallels) ? data.parallels : [];
 
-    const availableTabs = getAvailableTabs(currentProductRows, currentProductParallels);
+    const availableTabs = getAvailableTabs(currentProductRows);
     if (availableTabs.some(t => t.key === "Base")) {
       currentProductTab = "Base";
     } else if (availableTabs.length) {
@@ -852,7 +825,7 @@ function renderCurrentProductTab() {
 
   const vars = getThemeVars();
   const displayBadge = esc(currentProductMeta?.displayName || "");
-  const availableTabs = getAvailableTabs(currentProductRows, currentProductParallels);
+  const availableTabs = getAvailableTabs(currentProductRows);
   const filteredRows = filterRowsForTab(currentProductRows, currentProductTab);
   const rowCountLabel = `${filteredRows.length.toLocaleString()} Card${filteredRows.length === 1 ? "" : "s"}`;
 
@@ -912,9 +885,7 @@ function renderCurrentProductTab() {
       ${
         currentProductTab === "Base"
           ? renderSingleChecklistTable(filteredRows, vars, "Base")
-          : currentProductTab === "Base Parallels"
-            ? renderBaseParallelsView(filteredRows, vars)
-            : renderSubsetBlocks(subsetBlocks, vars)
+          : renderSubsetBlocks(subsetBlocks, vars)
       }
     </div>
   `;
@@ -923,7 +894,7 @@ function renderCurrentProductTab() {
 }
 
 function renderSingleChecklistTable(rows, vars, emptyLabel) {
-  const baseParallels = getParallelsForSectionSubset("Base", "[Base]");
+  const baseParallels = getParallelsForSectionSubset(["base"], "[Base]");
 
   return `
     ${renderParallelsList(baseParallels)}
@@ -962,11 +933,6 @@ function renderSingleChecklistTable(rows, vars, emptyLabel) {
   `;
 }
 
-function renderBaseParallelsView(rows, vars) {
-  const baseSubset = groupRowsBySubset(rows, "[Base]");
-  return renderSubsetBlocks(baseSubset, vars);
-}
-
 function renderSubsetBlocks(groups, vars) {
   if (!groups.length) {
     return `
@@ -988,7 +954,7 @@ function renderSubsetBlocks(groups, vars) {
   }
 
   return groups.map(group => {
-    const sectionForParallels = currentProductTab === "Base Parallels" ? "Base" : currentProductTab;
+    const sectionForParallels = getParallelSectionKeys(currentProductTab);
     const parallels = getParallelsForSectionSubset(sectionForParallels, group.subset);
 
     return `
