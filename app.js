@@ -16,7 +16,7 @@
 ========================================= */
 
 // ---------------- CONFIG ----------------
-const EXEC_URL = "https://script.google.com/macros/s/AKfycbx-K9syDWHuw-G3c34tfkCWJRTq8PLdDsyotYvzJe3u877V-wkBCx4pBcxykcb6IkQW/exec";
+const EXEC_URL = "https://script.google.com/macros/s/AKfycbykZNU_6ePqR6vLOiM86TIN6xE4I-mOhS9Jg3YVEJPndr_19LNLv1SW0LC3wMLX37n5/exec";
 
 const INDEX_KEY = "cv_index_v1";
 const INDEX_VER_KEY = "cv_index_ver_v1";
@@ -182,6 +182,7 @@ function getThemeVars() {
 function fmtStat(v) {
   return esc(v || "—");
 }
+
 function fmtUpdatedDate(value) {
   if (!value) return "";
 
@@ -197,13 +198,11 @@ function fmtBaseballRateStat(value) {
   if (!s) return "—";
 
   const n = Number(s);
-  if (!Number.isFinite(n)) return esc(s);
+  if (!Number.isFinite(n)) return s;
 
-  if (n >= 1) {
-    return esc(n.toFixed(3));
-  }
-
-  return esc(n.toFixed(3).replace(/^0/, ""));
+  const fixed = n.toFixed(3);
+  if (n >= 1) return fixed;
+  return fixed.replace(/^0/, "");
 }
 
 function toCardNoSortValue(v) {
@@ -429,11 +428,11 @@ function renderParallelsList(parallels) {
   `;
 }
 
-function renderMiniStat(label, value) {
+function renderMiniStat(label, value, extraClass = "") {
   const vars = getThemeVars();
 
   return `
-    <div style="
+    <div class="${extraClass}" style="
       border:1px solid ${vars.divider};
       border-radius:14px;
       padding:10px 12px;
@@ -443,7 +442,7 @@ function renderMiniStat(label, value) {
         ${esc(label)}
       </div>
       <div style="font-size:18px;font-weight:800;line-height:1;">
-        ${(value)}
+        ${esc(value || "—")}
       </div>
     </div>
   `;
@@ -464,8 +463,7 @@ function renderPlayerStatsCard(player) {
           </div>
         </div>
 
-        <div style="
-          display:inline-flex;
+        <div class="playerUpdated" style="
           align-items:center;
           justify-content:center;
           padding:6px 12px;
@@ -477,36 +475,27 @@ function renderPlayerStatsCard(player) {
           color:${vars.badgeText};
           white-space:nowrap;
         ">
-         ${fmtUpdatedDate(player.updated_at)}
+          ${fmtUpdatedDate(player.updated_at)}
         </div>
       </div>
 
       <div style="margin-top:14px;">
         <div style="font-weight:700;margin-bottom:8px;">Current Season</div>
-        <div style="
-          display:grid;
-          grid-template-columns:repeat(5,minmax(0,1fr));
-          gap:10px;
-          margin-bottom:16px;
-        ">
+        <div class="playerStatsGrid" style="margin-bottom:16px;">
           ${renderMiniStat("WAR", player.season.war)}
           ${renderMiniStat("H", player.season.h)}
           ${renderMiniStat("HR", player.season.hr)}
-          ${renderMiniStat("BA", player.season.ba)}
-          ${renderMiniStat("OPS", player.season.ops)}
+          ${renderMiniStat("BA", fmtBaseballRateStat(player.season.ba))}
+          ${renderMiniStat("OPS", fmtBaseballRateStat(player.season.ops), "desktopOnly")}
         </div>
 
         <div style="font-weight:700;margin-bottom:8px;">Career</div>
-        <div style="
-          display:grid;
-          grid-template-columns:repeat(5,minmax(0,1fr));
-          gap:10px;
-        ">
+        <div class="playerStatsGrid">
           ${renderMiniStat("WAR", player.career.war)}
           ${renderMiniStat("H", player.career.h)}
           ${renderMiniStat("HR", player.career.hr)}
-          ${renderMiniStat("BA", player.career.ba)}
-          ${renderMiniStat("OPS", player.career.ops)}
+          ${renderMiniStat("BA", fmtBaseballRateStat(player.career.ba))}
+          ${renderMiniStat("OPS", fmtBaseballRateStat(player.career.ops), "desktopOnly")}
         </div>
       </div>
     </div>
@@ -1023,10 +1012,9 @@ function renderSingleChecklistTable(rows, vars, emptyLabel) {
   return `
     ${renderParallelsList(baseParallels)}
 
-    <div style="
+    <div class="tableScroller" style="
       border:1px solid ${vars.divider};
       border-radius:16px;
-      overflow:hidden;
       margin-top:8px;
     ">
       <table style="margin-top:0;">
@@ -1060,10 +1048,9 @@ function renderSingleChecklistTable(rows, vars, emptyLabel) {
 function renderSubsetBlocks(groups, vars) {
   if (!groups.length) {
     return `
-      <div style="
+      <div class="tableScroller" style="
         border:1px solid ${vars.divider};
         border-radius:16px;
-        overflow:hidden;
         margin-top:8px;
       ">
         <table style="margin-top:0;">
@@ -1088,10 +1075,9 @@ function renderSubsetBlocks(groups, vars) {
 
         ${renderParallelsList(parallels)}
 
-        <div style="
+        <div class="tableScroller" style="
           border:1px solid ${vars.divider};
           border-radius:16px;
-          overflow:hidden;
         ">
           <table style="margin-top:0;">
             <thead>
@@ -1163,10 +1149,9 @@ function renderBroadResults(q, rows, sport, pageInfo) {
       <div style="opacity:.75;font-size:13px;margin-bottom:6px;">Query: ${esc(q)}</div>
       <div style="opacity:.75;font-size:13px;margin-bottom:12px;">Showing ${start.toLocaleString()}-${end.toLocaleString()} of ${total.toLocaleString()}</div>
 
-      <div style="
+      <div class="tableScroller" style="
         border:1px solid ${vars.divider};
         border-radius:16px;
-        overflow:hidden;
       ">
         <table style="margin-top:0;">
           <thead>
@@ -1174,8 +1159,8 @@ function renderBroadResults(q, rows, sport, pageInfo) {
               <th>Product</th>
               <th>Subset</th>
               <th>Card No.</th>
-              <th>Player</th>
-              <th>Team</th>
+              <th class="mobileHide">Player</th>
+              <th class="mobileHide">Team</th>
               <th></th>
             </tr>
           </thead>
@@ -1185,8 +1170,8 @@ function renderBroadResults(q, rows, sport, pageInfo) {
                 <td>${esc(r.displayName || "")}</td>
                 <td>${esc(r.subset || "")}</td>
                 <td>${esc(r.card_no || "")}</td>
-                <td>${esc(r.player || "")}</td>
-                <td>${esc(r.team || "")}</td>
+                <td class="mobileHide">${esc(r.player || "")}</td>
+                <td class="mobileHide">${esc(r.team || "")}</td>
                 <td>${makeTagBubble(r.tag)}</td>
               </tr>
             `).join("")}
