@@ -182,6 +182,29 @@ function getThemeVars() {
 function fmtStat(v) {
   return esc(v || "—");
 }
+function fmtUpdatedDate(value) {
+  if (!value) return "";
+
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return esc(value);
+
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `Updated ${months[d.getMonth()]} ${d.getDate()} ${d.getFullYear()}`;
+}
+
+function fmtBaseballRateStat(value) {
+  const s = norm(value);
+  if (!s) return "—";
+
+  const n = Number(s);
+  if (!Number.isFinite(n)) return esc(s);
+
+  if (n >= 1) {
+    return esc(n.toFixed(3));
+  }
+
+  return esc(n.toFixed(3).replace(/^0/, ""));
+}
 
 function toCardNoSortValue(v) {
   const s = norm(v);
@@ -420,7 +443,7 @@ function renderMiniStat(label, value) {
         ${esc(label)}
       </div>
       <div style="font-size:18px;font-weight:800;line-height:1;">
-        ${fmtStat(value)}
+        ${(value)}
       </div>
     </div>
   `;
@@ -454,7 +477,7 @@ function renderPlayerStatsCard(player) {
           color:${vars.badgeText};
           white-space:nowrap;
         ">
-          ${esc(player.updated_at || "")}
+         ${fmtUpdatedDate(player.updated_at)}
         </div>
       </div>
 
@@ -467,10 +490,10 @@ function renderPlayerStatsCard(player) {
           margin-bottom:16px;
         ">
           ${renderMiniStat("WAR", player.season.war)}
+          ${renderMiniStat("H", player.season.h)}
           ${renderMiniStat("HR", player.season.hr)}
           ${renderMiniStat("BA", player.season.ba)}
           ${renderMiniStat("OPS", player.season.ops)}
-          ${renderMiniStat("OPS+", player.season.ops_plus)}
         </div>
 
         <div style="font-weight:700;margin-bottom:8px;">Career</div>
@@ -480,10 +503,10 @@ function renderPlayerStatsCard(player) {
           gap:10px;
         ">
           ${renderMiniStat("WAR", player.career.war)}
+          ${renderMiniStat("H", player.career.h)}
           ${renderMiniStat("HR", player.career.hr)}
           ${renderMiniStat("BA", player.career.ba)}
           ${renderMiniStat("OPS", player.career.ops)}
-          ${renderMiniStat("OPS+", player.career.ops_plus)}
         </div>
       </div>
     </div>
