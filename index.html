@@ -379,6 +379,68 @@
         font-size: 13px;
       }
     }
+    /* keep cards aligned on mobile */
+.searchCard,
+.resultsWrap,
+.card{
+  width:100%;
+  max-width:100%;
+}
+
+/* allow wide content to scroll inside card instead of stretching layout */
+.tableScroller{
+  width:100%;
+  max-width:100%;
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+}
+
+/* player stat card helpers */
+.playerStatsGrid{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:10px;
+}
+
+.playerUpdated{
+  display:inline-flex;
+}
+
+.mobileHide{
+  display:table-cell;
+}
+
+.desktopOnly{
+  display:block;
+}
+
+@media (max-width: 640px){
+  .playerUpdated{
+    display:none !important;
+  }
+
+  .playerStatsGrid{
+    grid-template-columns:repeat(4,minmax(0,1fr));
+  }
+
+  .desktopOnly{
+    display:none !important;
+  }
+
+  .mobileHide{
+    display:none !important;
+  }
+
+  .content{
+    padding-left:12px;
+    padding-right:12px;
+  }
+
+  th, td{
+    padding:8px 6px;
+    font-size:13px;
+  }
+}
   </style>
 </head>
 
@@ -401,7 +463,7 @@
       </div>
 
       <div class="card searchCard">
-        <div class="heroText">Checklist data, not screenshots.</div>
+        <div class="heroText">Searchable Checklist &amp; Player Data.</div>
 
         <select id="sport" aria-label="Select sport">
           <option value="">All Sports</option>
