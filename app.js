@@ -12,6 +12,7 @@
    - Subset grouping for Inserts/Autographs/Relics/Variations
    - Broad search paging
    - Parallels support from Google Sheets Parallels tab
+   - Baseball hitter player stat card support
 ========================================= */
 
 // ---------------- CONFIG ----------------
@@ -41,6 +42,7 @@ let currentProductMeta = null;
 let currentProductRows = [];
 let currentProductParallels = [];
 let currentProductTab = "Base";
+let currentPlayerStats = null;
 
 let broadSearchState = {
   q: "",
@@ -175,6 +177,10 @@ function getThemeVars() {
     subText: isLight ? "rgba(0,0,0,0.70)" : "rgba(255,255,255,0.78)",
     divider: isLight ? "rgba(0,0,0,0.10)" : "rgba(255,255,255,0.10)"
   };
+}
+
+function fmtStat(v) {
+  return esc(v || "—");
 }
 
 function toCardNoSortValue(v) {
@@ -396,6 +402,90 @@ function renderParallelsList(parallels) {
           </li>
         `).join("")}
       </ul>
+    </div>
+  `;
+}
+
+function renderMiniStat(label, value) {
+  const vars = getThemeVars();
+
+  return `
+    <div style="
+      border:1px solid ${vars.divider};
+      border-radius:14px;
+      padding:10px 12px;
+      min-width:0;
+    ">
+      <div style="font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:${vars.subText};margin-bottom:4px;">
+        ${esc(label)}
+      </div>
+      <div style="font-size:18px;font-weight:800;line-height:1;">
+        ${fmtStat(value)}
+      </div>
+    </div>
+  `;
+}
+
+function renderPlayerStatsCard(player) {
+  if (!player) return "";
+
+  const vars = getThemeVars();
+
+  return `
+    <div class="card" style="margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:800;font-size:20px;line-height:1.15;margin-bottom:4px;">${esc(player.player)}</div>
+          <div style="color:${vars.subText};font-size:13px;">
+            Baseball Player Snapshot
+          </div>
+        </div>
+
+        <div style="
+          display:inline-flex;
+          align-items:center;
+          justify-content:center;
+          padding:6px 12px;
+          border-radius:999px;
+          font-size:13px;
+          font-weight:700;
+          background:${vars.badgeBg};
+          border:1px solid ${vars.badgeBorder};
+          color:${vars.badgeText};
+          white-space:nowrap;
+        ">
+          ${esc(player.updated_at || "")}
+        </div>
+      </div>
+
+      <div style="margin-top:14px;">
+        <div style="font-weight:700;margin-bottom:8px;">Current Season</div>
+        <div style="
+          display:grid;
+          grid-template-columns:repeat(5,minmax(0,1fr));
+          gap:10px;
+          margin-bottom:16px;
+        ">
+          ${renderMiniStat("WAR", player.season.war)}
+          ${renderMiniStat("HR", player.season.hr)}
+          ${renderMiniStat("BA", player.season.ba)}
+          ${renderMiniStat("OPS", player.season.ops)}
+          ${renderMiniStat("OPS+", player.season.ops_plus)}
+        </div>
+
+        <div style="font-weight:700;margin-bottom:8px;">Career</div>
+        <div style="
+          display:grid;
+          grid-template-columns:repeat(5,minmax(0,1fr));
+          gap:10px;
+        ">
+          ${renderMiniStat("WAR", player.career.war)}
+          ${renderMiniStat("HR", player.career.hr)}
+          ${renderMiniStat("BA", player.career.ba)}
+          ${renderMiniStat("OPS", player.career.ops)}
+          ${renderMiniStat("OPS+", player.career.ops_plus)}
+        </div>
+      </div>
     </div>
   `;
 }
@@ -667,6 +757,7 @@ if (elBtnClear) {
     currentProductRows = [];
     currentProductParallels = [];
     currentProductTab = "Base";
+    currentPlayerStats = null;
     broadSearchState = {
       q: "",
       sport: "",
@@ -738,6 +829,7 @@ async function runProductSearch(code, sport) {
   currentProductMeta = null;
   currentProductRows = [];
   currentProductParallels = [];
+  currentPlayerStats = null;
   broadSearchState = {
     q: "",
     sport: "",
@@ -780,6 +872,7 @@ async function runBroadSearch(q, sport, page = 1) {
   currentProductRows = [];
   currentProductParallels = [];
   currentProductTab = "Base";
+  currentPlayerStats = null;
 
   broadSearchState.q = q;
   broadSearchState.sport = sport || "";
@@ -790,19 +883,27 @@ async function runBroadSearch(q, sport, page = 1) {
   elResults.innerHTML = `<div class="card" style="opacity:.8;">Searching…</div>`;
 
   try {
-    const data = await api("searchCards", {
-      q,
-      sport,
-      limit: BROAD_PAGE_SIZE,
-      page
-    });
+    const [cardsData, playerData] = await Promise.all([
+      api("searchCards", {
+        q,
+        sport,
+        limit: BROAD_PAGE_SIZE,
+        page
+      }),
+      api("getPlayerStats", {
+        q,
+        sport
+      }).catch(() => ({ found: false }))
+    ]);
 
-    broadSearchState.total = Number(data.total) || 0;
-    broadSearchState.totalPages = Number(data.totalPages) || 0;
-    broadSearchState.page = Number(data.page) || 1;
-    broadSearchState.pageSize = Number(data.pageSize) || BROAD_PAGE_SIZE;
+    broadSearchState.total = Number(cardsData.total) || 0;
+    broadSearchState.totalPages = Number(cardsData.totalPages) || 0;
+    broadSearchState.page = Number(cardsData.page) || 1;
+    broadSearchState.pageSize = Number(cardsData.pageSize) || BROAD_PAGE_SIZE;
 
-    renderBroadResults(q, data.results || [], sport, {
+    currentPlayerStats = playerData && playerData.found ? playerData.player : null;
+
+    renderBroadResults(q, cardsData.results || [], sport, {
       total: broadSearchState.total,
       page: broadSearchState.page,
       pageSize: broadSearchState.pageSize,
@@ -1009,9 +1110,11 @@ function bindProductTabButtons() {
 function renderBroadResults(q, rows, sport, pageInfo) {
   const vars = getThemeVars();
   const titleBits = ["Search Results"];
+  const playerCardHtml = currentPlayerStats ? renderPlayerStatsCard(currentPlayerStats) : "";
 
   if (!rows.length) {
     elResults.innerHTML = `
+      ${playerCardHtml}
       <div class="card">
         <div style="font-weight:800;margin-bottom:6px;">${titleBits.join(" • ")}</div>
         <div style="opacity:.75;font-size:13px;margin-bottom:10px;">Query: ${esc(q)}</div>
@@ -1030,6 +1133,8 @@ function renderBroadResults(q, rows, sport, pageInfo) {
   const end = Math.min(page * pageSize, total);
 
   elResults.innerHTML = `
+    ${playerCardHtml}
+
     <div class="card">
       <div style="font-weight:800;margin-bottom:6px;">${titleBits.join(" • ")}</div>
       <div style="opacity:.75;font-size:13px;margin-bottom:6px;">Query: ${esc(q)}</div>
