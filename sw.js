@@ -1,4 +1,4 @@
-const CACHE_NAME = "chasingmajors-checklist-v8";
+const CACHE_NAME = "chasingmajors-checklist-v9";
 const APP_SHELL = [
   "./",
   "./index.html",
